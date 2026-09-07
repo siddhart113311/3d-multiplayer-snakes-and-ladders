@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Next.js types
+        run: npx next typegen
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint --if-present
+        continue-on-error: true
+
+      - name: Build
+        # DATABASE_URL is only read at request time, but src/db/index.ts throws
+        # without it, so provide a dummy value for the build step.
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
+        run: npm run build

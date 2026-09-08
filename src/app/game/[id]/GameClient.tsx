@@ -218,6 +218,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   processStateRef.current = processState;
 
   const fetchState = useCallback(async () => {
+    if (terminatedReason) return;
     try {
       const pid = credsRef.current?.pid ?? "";
       processStateRef.current(await request("get", pid, credsRef.current?.secret ?? ""));
@@ -230,7 +231,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
         console.warn(e);
       }
     }
-  }, [request, storageKey]);
+  }, [request, storageKey, terminatedReason]);
 
   // init
   useEffect(() => {
@@ -263,8 +264,11 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       }
     }
     void fetchState();
-    // Solo mode ticks locally (400ms); online multiplayer has a 1500ms sync heartbeat alongside WebSockets
-    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 1500);
+    // Solo mode ticks locally (400ms); online multiplayer uses Pusher WebSockets with a relaxed 8s safety heartbeat
+    const iv = setInterval(() => {
+      if (terminatedReason || pubRef.current?.status === "finished") return;
+      void fetchState();
+    }, localRef.current ? 400 : 8000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
@@ -374,6 +378,18 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const me = useMemo(() => pub?.players.find((p) => p.you) ?? null, [pub]);
   const current = pub ? pub.players[pub.turn] : null;
   const isHost = Boolean(me && pub && me.id === pub.hostId);
+
+  // In Hunt / Fire mode: Host triggers the server hazard tick right as the timer elapses
+  useEffect(() => {
+    if (localRef.current || !isHost || pub?.status !== "playing") return;
+    const nextAt = pub.mode === "hunt" ? pub.nextCreepAt : pub.mode === "fire" ? pub.nextSnakeAt : 0;
+    if (!nextAt) return;
+    const delay = Math.max(50, nextAt - Date.now() + 50);
+    const t = setTimeout(() => {
+      void fetchState();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [isHost, pub?.status, pub?.mode, pub?.nextCreepAt, pub?.nextSnakeAt, fetchState]);
 
   const onDestroyGame = useCallback(async () => {
     if (!window.confirm("Are you sure you want to terminate and delete this game? All players will be disconnected, the voice room will close, and this game will be permanently deleted from the database.")) return;

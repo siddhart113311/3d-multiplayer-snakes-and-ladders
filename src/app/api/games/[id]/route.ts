@@ -60,13 +60,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     // 3. Advance world hazards (fire/hunt)
     const before = state.seq;
     advanceWorld(state, now);
-    if (state.seq !== before) {
+    const hazardAdvanced = state.seq !== before;
+    if (hazardAdvanced) {
       dbDirty = true;
     }
 
-    if (livenessChanged) {
+    if (livenessChanged || hazardAdvanced) {
       dbDirty = true;
-      // Broadcast state update since an unresponsive player transitioned to CPU
+      // Broadcast state update immediately via Pusher WebSockets to all players
       await triggerGameEvent([id, row.code], "game-updated", {
         code: row.code,
         state: publicState(state),

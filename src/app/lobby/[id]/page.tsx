@@ -100,6 +100,7 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
   codeRef.current = code;
 
   const poll = useCallback(async () => {
+    if (err) return;
     try {
       const c = credsRef.current ?? loadCreds(id);
       const data = await api<{ code: string; state: LobbyState }>(`/api/games/${id}?pid=${c?.pid ?? ""}`);
@@ -111,15 +112,16 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
         router.replace("/");
       }, 1500);
     }
-  }, [id, router]);
+  }, [id, router, err]);
 
   // Primary: Sync heartbeat and game-ID channel subscriptions
   useEffect(() => {
     void poll();
 
     const iv = setInterval(() => {
+      if (err) return;
       void poll();
-    }, 1500);
+    }, 5000);
 
     const pusher = getPusherClient();
     if (!pusher || !id) {

@@ -622,8 +622,8 @@ export function advanceWorld(state: GameState, now: number) {
   advanceHunt(state, now);
 }
 
-/** Timeout after which an inactive player is considered disconnected/unresponsive (18 seconds). */
-export const UNRESPONSIVE_TIMEOUT_MS = 18000;
+/** Timeout after which an inactive player is considered disconnected/unresponsive (28 seconds). */
+export const UNRESPONSIVE_TIMEOUT_MS = 28000;
 
 export interface LivenessResult {
   hostUnresponsive: boolean;

@@ -236,6 +236,45 @@ export function sizeLabel(shape: BoardShape, size: BoardSize): string {
   return HEX_TRIM[s] > 0 ? `~${HEX_RINGS[s]} rings` : `${HEX_RINGS[s]} rings`;
 }
 
+/**
+ * Adjacency list in world space, cached per board.
+ *
+ * Hunt mode needs snakes to crawl one *physical* cell at a time, which is not
+ * the same as one index step: consecutive indices are neighbours along the play
+ * path, but a snake stalking sideways must be able to cross between rows/rings.
+ * Neighbours are therefore any cells within 1.5x the tightest cell spacing,
+ * which resolves to the natural 4/6/3-way adjacency of each board shape.
+ */
+const neighborCache = new Map<string, number[][]>();
+
+export function cellNeighbors(def: BoardDef, idx: number): number[] {
+  const key = `${def.shape}:${def.size}`;
+  let table = neighborCache.get(key);
+  if (!table) {
+    const n = def.cells.length;
+    const dist = (a: CellPos, b: CellPos) => Math.hypot(a.x - b.x, a.z - b.z);
+    let minStep = Infinity;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const d = dist(def.cells[i], def.cells[j]);
+        if (d < minStep) minStep = d;
+      }
+    }
+    const limit = minStep * 1.5;
+    table = Array.from({ length: n }, () => [] as number[]);
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (dist(def.cells[i], def.cells[j]) <= limit) {
+          table[i].push(j);
+          table[j].push(i);
+        }
+      }
+    }
+    neighborCache.set(key, table);
+  }
+  return table[idx] ?? [];
+}
+
 /** Nearest cell index to a world point. */
 export function nearestCell(def: BoardDef, x: number, z: number): number {
   let best = 0;

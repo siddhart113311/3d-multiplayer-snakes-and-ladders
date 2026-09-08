@@ -102,8 +102,13 @@ export function getBreakpoint(width: number, height: number, devicePixelRatio = 
   const isTablet = !isPhone && min < 1024;
   const isPortrait = height >= width;
 
-  // Phones: cap DPR harder (a 3x display would otherwise render 9x the pixels).
-  const dprCap = isPhone ? Math.min(devicePixelRatio, 2) : isTablet ? Math.min(devicePixelRatio, 2) : Math.min(devicePixelRatio, 1.8);
+  // Phones: cap DPR aggressively. At 1.6× a 3× phone renders only 28% of
+  // native pixel count, preserving 3D fluidity while staying visually sharp.
+  const dprCap = isPhone
+    ? Math.min(devicePixelRatio, 1.6)
+    : isTablet
+      ? Math.min(devicePixelRatio, 1.85)
+      : Math.min(devicePixelRatio, 1.8);
 
   // The HUD hugs the top and bottom edges, and grows relatively larger on
   // small screens, so reserve more there.

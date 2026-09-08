@@ -1,11 +1,18 @@
 import { db } from "@/db";
+import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
-import { addChat, GameState, publicState } from "@/game/engine";
+import { addChat, GameState, normalizeState, publicState } from "@/game/engine";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    await ensureDatabase();
+  } catch (e) {
+    console.error("Chat database unavailable:", e);
+    return Response.json({ error: databaseError(e) }, { status: 503 });
+  }
   const { id } = await ctx.params;
   let body: { pid?: string; secret?: string; text?: string };
   try {
@@ -21,7 +28,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const row = rows[0];
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
 
-  const state = row.state as unknown as GameState;
+  const state = normalizeState(row.state as unknown as GameState);
   const me = state.players.find((p) => p.id === body.pid);
   if (!me || me.secret !== body.secret) return Response.json({ error: "unauthorized" }, { status: 401 });
 

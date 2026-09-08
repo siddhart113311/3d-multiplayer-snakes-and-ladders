@@ -14,7 +14,7 @@ import { buildSnakeCurve } from "@/game/snakeCurves";
 import { sfx } from "@/game/sounds";
 import { api, loadCreds, PlayerCreds, saveCreds, saveLocalScore } from "@/lib/api";
 import { useViewport } from "@/lib/useViewport";
-import { FireTimer, GameOverOverlay, HudPlayer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
+import { FireTimer, GameOverOverlay, HudPlayer, HuntTimer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
 import ChatDock, { type ChatMsg } from "@/components/ChatDock";
 import type { ParticlesHandle } from "@/components/three/Particles";
 
@@ -29,7 +29,7 @@ interface PubEvent {
 interface PubState {
   board: "square" | "hex" | "triangle";
   size: BoardSize;
-  mode: "classic" | "fire";
+  mode: "classic" | "fire" | "hunt";
   status: "waiting" | "playing" | "finished";
   startedAt: number | null;
   hostId: string;
@@ -46,6 +46,8 @@ interface PubState {
   moveCount: number;
   fireIntervalMs: number;
   nextSnakeAt: number;
+  huntIntervalMs: number;
+  nextCreepAt: number;
   lastActionAt: number;
   scores: Record<string, number>;
 }
@@ -256,11 +258,12 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // fire countdown ticker
+  // hazard countdown ticker — hunt ticks every ~2.6s, so it needs finer updates
   useEffect(() => {
-    const iv = setInterval(() => setNow(Date.now()), 300);
+    const period = pub?.mode === "hunt" ? 100 : 300;
+    const iv = setInterval(() => setNow(Date.now()), period);
     return () => clearInterval(iv);
-  }, []);
+  }, [pub?.mode]);
 
   const me = useMemo(() => pub?.players.find((p) => p.you) ?? null, [pub]);
   const current = pub ? pub.players[pub.turn] : null;
@@ -470,7 +473,12 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       .sort((a, b) => b.score - a.score);
   }, [pub]);
 
-  const charging = Boolean(pub?.mode === "fire" && pub.status === "playing" && pub.nextSnakeAt - now < 4500 && pub.nextSnakeAt - now > 0);
+  // Snakes glow just before they act — a fire migration or a hunt step.
+  const charging = Boolean(
+    pub?.status === "playing" &&
+      ((pub.mode === "fire" && pub.nextSnakeAt - now < 4500 && pub.nextSnakeAt - now > 0) ||
+        (pub.mode === "hunt" && pub.nextCreepAt - now < 1200 && pub.nextCreepAt - now > 0))
+  );
 
   if (!pub) {
     return (
@@ -553,6 +561,9 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
             </div>
             {pub.mode === "fire" && pub.status === "playing" && (
               <FireTimer nextSnakeAt={pub.nextSnakeAt} interval={pub.fireIntervalMs} compact={vp.isPhone} />
+            )}
+            {pub.mode === "hunt" && pub.status === "playing" && (
+              <HuntTimer nextCreepAt={pub.nextCreepAt} interval={pub.huntIntervalMs} compact={vp.isPhone} />
             )}
             {isSolo && pub.status === "playing" && (
               <div

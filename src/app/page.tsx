@@ -2,13 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
+import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
-import { Bot, Crown, Flame, Gamepad2, Hexagon, Play, Pyramid, Sparkles, Square, Swords, Trophy, User, Users, Volume2, VolumeX, Wifi } from "lucide-react";
+import { Bot, Crosshair, Crown, Flame, Gamepad2, Hexagon, Play, Pyramid, Sparkles, Square, Swords, Trophy, User, Users, Volume2, VolumeX, Wifi } from "lucide-react";
+import type { GameMode } from "@/game/engine";
 import { BoardShape, BoardSize, cellCount, DEFAULT_SIZE, MAX_CELLS, sizeLabel } from "@/game/boards";
 import { DIFFICULTY_LABEL, type Difficulty } from "@/game/localGame";
 import { sfx } from "@/game/sounds";
 import { api, loadLocalScores, saveCreds } from "@/lib/api";
+
+// Three.js only loads once the menu mounts, keeping first paint light.
+const HeroScene = dynamic(() => import("@/components/three/HeroScene"), {
+  ssr: false,
+  loading: () => (
+    <div className="absolute inset-0 flex items-center justify-center bg-[#060b18]">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+    </div>
+  ),
+});
 
 const BOARDS: Array<{ shape: BoardShape; name: string; icon: typeof Square; blurb: string }> = [
   { shape: "square", name: "Classic Square", icon: Square, blurb: "The timeless boustrophedon grid" },
@@ -33,7 +44,7 @@ export default function HomePage() {
   const [name, setName] = useState("");
   const [board, setBoard] = useState<BoardShape>("square");
   const [size, setSize] = useState<BoardSize>(DEFAULT_SIZE);
-  const [mode, setMode] = useState<"classic" | "fire">("classic");
+  const [mode, setMode] = useState<GameMode>("classic");
   const cells = cellCount(board, size);
   const [code, setCode] = useState("");
   const [err, setErr] = useState("");
@@ -42,6 +53,8 @@ export default function HomePage() {
   const [opponents, setOpponents] = useState(2);
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
   const [muted, setMuted] = useState(false);
+  const [onlineStatus, setOnlineStatus] = useState<"checking" | "ready" | "unavailable">("checking");
+  const [onlineError, setOnlineError] = useState("");
   const [top, setTop] = useState<ScoreRow[]>([]);
   const [mine, setMine] = useState<ScoreRow[]>([]);
 
@@ -52,6 +65,15 @@ export default function HomePage() {
     void api<{ scores: ScoreRow[] }>("/api/scores")
       .then((d) => setTop(d.scores))
       .catch(() => {});
+    void api<{ ok: boolean; multiplayer: boolean; error?: string }>("/api/health")
+      .then((d) => {
+        setOnlineStatus(d.multiplayer ? "ready" : "unavailable");
+        setOnlineError(d.error ?? "");
+      })
+      .catch((e) => {
+        setOnlineStatus("unavailable");
+        setOnlineError(e instanceof Error ? e.message : "Online multiplayer is unavailable.");
+      });
   }, []);
 
   const startSolo = () => {
@@ -139,22 +161,15 @@ export default function HomePage() {
             </motion.p>
           </div>
 
-          {/* hero key art */}
+          {/* live animated 3D hero */}
           <motion.div
             initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.1 }}
-            className="group relative h-64 overflow-hidden rounded-3xl border border-white/10 bg-black/30 shadow-[0_20px_80px_rgba(0,0,0,0.5)] md:h-80"
+            className="relative h-64 overflow-hidden rounded-3xl border border-white/10 bg-[#060b18] shadow-[0_20px_80px_rgba(0,0,0,0.5)] md:h-80"
           >
-            <Image
-              src="/images/hero-board.jpg"
-              alt="A giant scaled serpent looming over a glowing 3D snakes and ladders board"
-              fill
-              priority
-              sizes="(max-width: 1024px) 100vw, 640px"
-              className="object-cover transition-transform duration-[1200ms] ease-out group-hover:scale-[1.06]"
-            />
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#060b18] via-transparent to-transparent" />
+            <HeroScene shape={board} fire={mode !== "classic"} />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-[#060b18] to-transparent" />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-4">
               <div>
                 <span className="block text-[10px] font-black uppercase tracking-[0.3em] text-emerald-300/90">
@@ -162,11 +177,11 @@ export default function HomePage() {
                 </span>
                 <span className="block text-[10px] font-bold uppercase tracking-[0.25em] text-white/45">
                   {cells} squares · {sizeLabel(board, size)} ·{" "}
-                  {mode === "fire" ? "roaming serpents" : "classic rules"}
+                  {mode === "fire" ? "roaming serpents" : mode === "hunt" ? "stalking pack" : "classic rules"}
                 </span>
               </div>
               <span className="rounded-full border border-white/15 bg-black/50 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.25em] text-white/60 backdrop-blur-sm">
-                3D · Online
+                Live 3D
               </span>
             </div>
           </motion.div>
@@ -274,13 +289,13 @@ export default function HomePage() {
 
           <div>
             <label className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.3em] text-white/50">Mode</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => {
                   setMode("classic");
                   sfx.click();
                 }}
-                className={`flex items-center justify-center gap-2 rounded-2xl border py-3 text-xs font-black uppercase tracking-wider transition-all ${
+                className={`flex flex-col items-center justify-center gap-1 rounded-2xl border py-2.5 text-[11px] font-black uppercase tracking-wider transition-all ${
                   mode === "classic" ? "border-cyan-400/60 bg-cyan-400/15 text-white shadow-[0_0_18px_rgba(34,211,238,0.25)]" : "border-white/10 bg-white/5 text-white/50"
                 }`}
               >
@@ -291,14 +306,30 @@ export default function HomePage() {
                   setMode("fire");
                   sfx.click();
                 }}
-                className={`flex items-center justify-center gap-2 rounded-2xl border py-3 text-xs font-black uppercase tracking-wider transition-all ${
+                className={`flex flex-col items-center justify-center gap-1 rounded-2xl border py-2.5 text-[11px] font-black uppercase tracking-wider transition-all ${
                   mode === "fire" ? "border-red-400/60 bg-red-500/15 text-white shadow-[0_0_18px_rgba(248,113,113,0.3)]" : "border-white/10 bg-white/5 text-white/50"
                 }`}
               >
                 <Flame className="h-4 w-4" /> Fire
               </button>
+              <button
+                onClick={() => {
+                  setMode("hunt");
+                  sfx.click();
+                }}
+                className={`flex flex-col items-center justify-center gap-1 rounded-2xl border py-2.5 text-[11px] font-black uppercase tracking-wider transition-all ${
+                  mode === "hunt" ? "border-violet-400/60 bg-violet-500/20 text-white shadow-[0_0_18px_rgba(167,139,250,0.35)]" : "border-white/10 bg-white/5 text-white/50"
+                }`}
+              >
+                <Crosshair className="h-4 w-4" /> Hunt
+              </button>
             </div>
             {mode === "fire" && <p className="mt-1.5 text-[11px] font-semibold text-red-300/80">Snakes migrate every 18 seconds — gulp anyone in their path!</p>}
+            {mode === "hunt" && (
+              <p className="mt-1.5 text-[11px] font-semibold text-violet-300/85">
+                The 5 nearest snakes stalk the active player, crawling a cell closer every 2.6s. Reach a head and you&apos;re swallowed.
+              </p>
+            )}
           </div>
 
           {/* solo / online switch */}
@@ -384,16 +415,38 @@ export default function HomePage() {
             </div>
           ) : (
             <div className="flex flex-col gap-2.5">
+              <div
+                className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] ${
+                  onlineStatus === "ready"
+                    ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+                    : onlineStatus === "checking"
+                      ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-200"
+                      : "border-rose-400/30 bg-rose-500/10 text-rose-200"
+                }`}
+              >
+                <span
+                  className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                    onlineStatus === "ready" ? "bg-emerald-400" : onlineStatus === "checking" ? "animate-pulse bg-cyan-400" : "bg-rose-400"
+                  }`}
+                />
+                <span>
+                  {onlineStatus === "ready"
+                    ? "Online lobby service ready"
+                    : onlineStatus === "checking"
+                      ? "Connecting to the lobby service…"
+                      : onlineError || "Online multiplayer requires a configured PostgreSQL database."}
+                </span>
+              </div>
               <motion.button
                 whileTap={{ scale: 0.97 }}
-                disabled={busy !== null}
+                disabled={busy !== null || onlineStatus !== "ready"}
                 onClick={() => void go("create")}
                 className="flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-400 to-violet-400 py-3.5 text-sm font-black uppercase tracking-widest text-slate-950 shadow-[0_0_30px_rgba(34,211,238,0.3)] transition hover:brightness-110 disabled:opacity-50"
               >
                 <Play className="h-4 w-4" /> {busy === "create" ? "Creating…" : "Create lobby"}
               </motion.button>
               <button
-                disabled={busy !== null}
+                disabled={busy !== null || onlineStatus !== "ready"}
                 onClick={() => void go("quick")}
                 className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 py-3 text-xs font-black uppercase tracking-wider text-white transition hover:bg-white/10 disabled:opacity-50"
               >
@@ -416,7 +469,7 @@ export default function HomePage() {
                   className="min-w-0 flex-1 rounded-2xl border border-white/15 bg-white/5 px-4 py-3 text-center font-mono text-lg font-black tracking-[0.4em] text-white outline-none transition focus:border-cyan-400/60"
                 />
                 <button
-                  disabled={busy !== null || code.length < 4}
+                  disabled={busy !== null || code.length < 4 || onlineStatus !== "ready"}
                   onClick={() => void go("join")}
                   className="rounded-2xl bg-gradient-to-r from-cyan-400 to-violet-400 px-5 text-xs font-black uppercase tracking-wider text-slate-950 transition hover:brightness-110 disabled:opacity-40"
                 >

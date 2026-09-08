@@ -116,13 +116,13 @@ const skinCache = new Map<string, { map: THREE.CanvasTexture; bump: THREE.Canvas
  * speckles, and a pale scaled belly. Also emits a bump map from the same
  * pattern so scales catch the light individually.
  */
-export function snakeSkinTexture(palette: SkinPalette, seed = 0) {
-  const key = `${palette.body}|${palette.belly}|${palette.accent}|${seed}`;
+export function snakeSkinTexture(palette: SkinPalette, seed = 0, resolution = 512) {
+  const W = Math.max(256, Math.min(512, resolution));
+  const H = W / 2;
+  const key = `${palette.body}|${palette.belly}|${palette.accent}|${seed}|${W}`;
   const cached = skinCache.get(key);
   if (cached) return cached;
 
-  const W = 512;
-  const H = 256;
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -245,6 +245,13 @@ export function snakeSkinTexture(palette: SkinPalette, seed = 0) {
   const bump = new THREE.CanvasTexture(bumpCanvas);
   bump.wrapS = THREE.RepeatWrapping;
   bump.wrapT = THREE.RepeatWrapping;
+  if (W <= 256) {
+    map.generateMipmaps = false;
+    map.minFilter = THREE.LinearFilter;
+    map.anisotropy = 2;
+    bump.generateMipmaps = false;
+    bump.minFilter = THREE.LinearFilter;
+  }
 
   const out = { map, bump };
   skinCache.set(key, out);

@@ -8,7 +8,7 @@ import { BoardShape, BoardSize } from "./boards";
 import {
   addChat,
   addPlayer,
-  advanceFire,
+  advanceWorld,
   applyRoll,
   createState,
   GameMode,
@@ -152,7 +152,7 @@ export class LocalGame {
       return this.respond(this.creds.pid);
     }
 
-    advanceFire(this.state, Date.now());
+    advanceWorld(this.state, Date.now());
 
     if (kind === "roll") {
       // same rule as the server: a bot's turn is executed on request

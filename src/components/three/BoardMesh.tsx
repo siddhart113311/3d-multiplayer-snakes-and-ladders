@@ -15,10 +15,12 @@ const END_C = "#6b4d0f";
  * All cell numbers baked into ONE texture drawn on a single plane.
  * With 225 cells, per-cell text meshes would cost hundreds of draw calls.
  */
-function useNumberOverlay(def: BoardDef) {
+function useNumberOverlay(def: BoardDef, textureSize: number) {
   return useMemo(() => {
     const R = def.radius;
-    const PX = 2560;
+    // Mobile GPUs can have strict memory/texture limits. 1536 is still >100px
+    // per cell on a 15×15 board, but uses only 36% of the memory of 2560.
+    const PX = Math.max(1024, Math.min(2560, textureSize));
     const canvas = document.createElement("canvas");
     canvas.width = PX;
     canvas.height = PX;
@@ -81,26 +83,34 @@ function useNumberOverlay(def: BoardDef) {
     });
 
     const tex = new THREE.CanvasTexture(canvas);
-    tex.anisotropy = 16;
+    if (PX < 2048) {
+      tex.generateMipmaps = false;
+      tex.minFilter = THREE.LinearFilter;
+      tex.anisotropy = 2;
+    } else {
+      tex.anisotropy = 16;
+    }
     tex.needsUpdate = true;
     return tex;
-  }, [def]);
+  }, [def, textureSize]);
 }
 
 export default function BoardMesh({
   def,
   activeCell = -1,
   flatView = false,
+  textureSize = 2560,
 }: {
   def: BoardDef;
   activeCell?: number;
   flatView?: boolean;
+  textureSize?: number;
 }) {
   const finishRef = useRef<THREE.Mesh>(null);
   const ringRef = useRef<THREE.Mesh>(null);
   const aRef = useRef<THREE.InstancedMesh>(null);
   const bRef = useRef<THREE.InstancedMesh>(null);
-  const numbers = useNumberOverlay(def);
+  const numbers = useNumberOverlay(def, textureSize);
 
   const cellGeo = useMemo(() => {
     if (def.shape === "square") return new THREE.BoxGeometry(def.cellSize, CELL_Y, def.cellSize);

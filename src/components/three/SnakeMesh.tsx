@@ -14,10 +14,12 @@ export default function SnakeMesh({
   visual,
   paletteIdx,
   charging,
+  mobileQuality = false,
 }: {
   visual: SnakeVisual;
   paletteIdx: number;
   charging: boolean;
+  mobileQuality?: boolean;
 }) {
   const bodyRef = useRef<THREE.Mesh>(null);
   const headRef = useRef<THREE.Group>(null);
@@ -28,7 +30,10 @@ export default function SnakeMesh({
   const localVersion = useRef(-1);
   const palette = SNAKE_PALETTE[paletteIdx % SNAKE_PALETTE.length];
 
-  const skin = useMemo(() => snakeSkinTexture(palette, paletteIdx + 1), [palette, paletteIdx]);
+  const skin = useMemo(
+    () => snakeSkinTexture(palette, paletteIdx + 1, mobileQuality ? 256 : 512),
+    [palette, paletteIdx, mobileQuality]
+  );
 
   // Uniforms driving the travelling swallow-lump. Kept in a ref so the render
   // loop can update them without recompiling the shader.
@@ -132,7 +137,9 @@ export default function SnakeMesh({
         prev = p;
       }
       const uvRepeat = Math.max(4, Math.round(len * 1.5));
-      const geo = buildSnakeGeometry(visual.curve, BASE_R, 104, 12, uvRepeat);
+      // Mobile keeps the same silhouette and shader deformation with ~55% fewer
+      // body vertices, reducing upload cost during Fire-Mode migrations.
+      const geo = buildSnakeGeometry(visual.curve, BASE_R, mobileQuality ? 72 : 104, mobileQuality ? 9 : 12, uvRepeat);
       geoRef.current?.dispose();
       geoRef.current = geo;
       body.geometry = geo;

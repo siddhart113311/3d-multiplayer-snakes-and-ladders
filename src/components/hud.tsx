@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpToLine as LadderIcon, Box, Crown, Flame, Grid2x2, Home, LogOut, Pause, Play, Skull, Swords, Trophy, Volume2, VolumeX } from "lucide-react";
+import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Pause, Play, Skull, Swords, Trophy, Volume2, VolumeX } from "lucide-react";
 import DiceCube from "./DiceCube";
 
 export interface HudPlayer {
@@ -145,6 +145,44 @@ export function FireTimer({
   );
 }
 
+/** Hunt mode: countdown until the stalking pack takes another step. */
+export function HuntTimer({
+  nextCreepAt,
+  interval,
+  compact = false,
+}: {
+  nextCreepAt: number;
+  interval: number;
+  compact?: boolean;
+}) {
+  const remain = Math.max(0, nextCreepAt - Date.now());
+  const frac = interval > 0 ? remain / interval : 0;
+  const imminent = remain < 900;
+  return (
+    <div
+      className={`flex items-center backdrop-blur-md ${compact ? "gap-1.5 rounded-xl px-2 py-1" : "gap-2 rounded-2xl px-3 py-2"} border ${
+        imminent ? "border-violet-400/60 bg-violet-500/25" : "border-violet-300/25 bg-black/35"
+      }`}
+    >
+      <Crosshair className={`${compact ? "h-4 w-4" : "h-5 w-5"} ${imminent ? "animate-ping text-violet-300" : "text-violet-400"}`} />
+      {!compact && (
+        <div className="flex flex-col">
+          <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-200/80">Pack closing in</span>
+          <div className="h-1.5 w-28 overflow-hidden rounded-full bg-white/10">
+            <div
+              className={`h-full rounded-full transition-[width] duration-200 ${imminent ? "bg-violet-300" : "bg-violet-400"}`}
+              style={{ width: `${frac * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+      <span className={`font-mono font-bold ${compact ? "text-xs" : "text-sm"} text-violet-200`}>
+        {(remain / 1000).toFixed(1)}s
+      </span>
+    </div>
+  );
+}
+
 export function LogTicker({ lines }: { lines: string[] }) {
   const last3 = lines.slice(-3);
   return (
@@ -244,6 +282,9 @@ export function TopBar({
         <span className="text-xs font-bold tracking-[0.25em] text-white/80">SERPENTIA</span>
         {mode === "fire" && (
           <span className="rounded bg-red-500/25 px-1.5 py-0.5 text-[9px] font-black tracking-widest text-red-300">FIRE</span>
+        )}
+        {mode === "hunt" && (
+          <span className="rounded bg-violet-500/25 px-1.5 py-0.5 text-[9px] font-black tracking-widest text-violet-300">HUNT</span>
         )}
         <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/60">{code}</span>
       </div>

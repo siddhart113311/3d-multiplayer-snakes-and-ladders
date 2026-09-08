@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Check, Copy, Crown, Flame, Home, Play, Trash2, Users } from "lucide-react";
+import { Bot, Check, Copy, Crosshair, Crown, Flame, Home, Play, Trash2, Users } from "lucide-react";
 import { api, loadCreds, PlayerCreds } from "@/lib/api";
 import { BoardShape, cellCount, clampSize, DEFAULT_SIZE, sizeLabel } from "@/game/boards";
 import { sfx } from "@/game/sounds";
@@ -130,6 +130,10 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
           {state?.mode === "fire" ? (
             <span className="flex items-center gap-1 rounded-full border border-red-400/30 bg-red-500/15 px-3 py-1 text-[11px] font-black text-red-300">
               <Flame className="h-3 w-3" /> FIRE MODE
+            </span>
+          ) : state?.mode === "hunt" ? (
+            <span className="flex items-center gap-1 rounded-full border border-violet-400/30 bg-violet-500/15 px-3 py-1 text-[11px] font-black text-violet-300">
+              <Crosshair className="h-3 w-3" /> HUNT MODE
             </span>
           ) : (
             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-bold text-white/70">CLASSIC</span>

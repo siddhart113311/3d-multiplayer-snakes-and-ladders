@@ -1,6 +1,7 @@
 import GameClient from "../game/[id]/GameClient";
 import { BOARD_SHAPES, BoardShape, clampSize, DEFAULT_SIZE } from "@/game/boards";
 import type { Difficulty } from "@/game/localGame";
+import type { GameMode } from "@/game/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,8 @@ export default async function SoloPage({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
   const rawBoard = one(sp.board) as BoardShape;
   const board: BoardShape = BOARD_SHAPES.includes(rawBoard) ? rawBoard : "square";
-  const mode = one(sp.mode) === "fire" ? "fire" : "classic";
+  const rawMode = one(sp.mode);
+  const mode: GameMode = rawMode === "fire" ? "fire" : rawMode === "hunt" ? "hunt" : "classic";
   const rawDiff = one(sp.diff);
   const difficulty: Difficulty = rawDiff === "chill" || rawDiff === "ruthless" ? rawDiff : "normal";
   const opponents = Math.max(0, Math.min(3, Number(one(sp.ops) || 2)));

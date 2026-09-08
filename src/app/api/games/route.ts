@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
 import { BoardShape, BOARD_SHAPES, clampSize, DEFAULT_SIZE } from "@/game/boards";
 import { addPlayer, createState, GameMode, startGame } from "@/game/engine";
@@ -9,10 +10,11 @@ export const dynamic = "force-dynamic";
 /** Create a lobby (or an instant quick-play game vs bots). */
 export async function POST(req: Request) {
   try {
+    await ensureDatabase();
     const body = await req.json();
     const name = String(body?.name ?? "Player").slice(0, 14) || "Player";
     const board: BoardShape = BOARD_SHAPES.includes(body?.board) ? body.board : "square";
-    const mode: GameMode = body?.mode === "fire" ? "fire" : "classic";
+    const mode: GameMode = body?.mode === "fire" ? "fire" : body?.mode === "hunt" ? "hunt" : "classic";
     const quick = Boolean(body?.quick);
     const botCount = Math.min(3, Math.max(1, Number(body?.bots ?? 3)));
 
@@ -45,8 +47,8 @@ export async function POST(req: Request) {
       status: state.status,
     });
   } catch (e) {
-    console.error(e);
-    return Response.json({ error: "failed to create game" }, { status: 500 });
+    console.error("Create lobby failed:", e);
+    return Response.json({ error: databaseError(e) }, { status: 503 });
   }
 }
 

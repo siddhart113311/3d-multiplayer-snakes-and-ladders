@@ -7,7 +7,9 @@
 Square, hex **and** triangle boards · roaming Fire-Mode serpents that *swallow* your token ·
 online lobbies with join codes · trash-talk chat · 2D/3D toggle · 60 fps on desktop and mobile
 
-![Serpentia](public/images/hero-board.jpg)
+*The start screen renders a live, looping 3D board — a token hops across the cells, scales a
+ladder, and is swallowed whole by the serpent — previewing whichever board shape and mode
+you have selected.*
 
 Built with **Next.js 16** · **React Three Fiber** · **TypeScript** · **Drizzle ORM** · **PostgreSQL** · **Tailwind CSS v4**
 
@@ -33,6 +35,10 @@ setting means the same thing whichever board you pick.
 - **🔥 Fire Mode** — snakes don't stay put. Every 18 seconds a serpent *migrates* across the
   board, and anyone caught in its path gets **gulped**: jaws flare, your token is swallowed,
   and a visible **bulge travels down the snake's body** before spitting you out at the tail.
+- **🎯 Hunt Mode** — the board hunts *you*. Every 2.6 seconds the **five nearest snakes** each
+  crawl one cell toward whoever is about to move, jaws parting as they close in. Reach a head
+  — or let one reach you — and you're swallowed. Snake positions are no longer fixed, so the
+  hazards you memorised last turn have already moved.
 
 ### Ways to play
 - **Single player** — 0–3 AI opponents across three difficulty tiers, plus a solo **time-attack**
@@ -178,12 +184,29 @@ Single-player runs are stored in `localStorage` and never touch the database.
 
 ## 🚢 Deploying
 
-Deploys anywhere Next.js runs. For **Vercel**:
+> **GitHub and GitHub Pages host source/static files only.** Online lobbies use Next.js
+> route handlers plus PostgreSQL, so deploy the repository to a server-side Next.js host
+> such as Vercel, Railway or Render. A GitHub Pages deployment cannot create or join lobbies.
+
+For **Vercel**:
 
 1. Push this repo to GitHub.
 2. Import it at [vercel.com/new](https://vercel.com/new).
-3. Add a `DATABASE_URL` environment variable pointing at a hosted Postgres instance.
-4. Run `npm run db:push` once against that database to create the tables.
+3. Create a hosted PostgreSQL database (Neon, Supabase, Railway, Vercel Postgres, etc.).
+4. Add its connection string as `DATABASE_URL` in the Vercel project's Environment Variables.
+5. Redeploy.
+
+The multiplayer schema self-initializes on the first request. `npm run db:push` remains
+available for local development and explicit schema management.
+
+Open `/api/health` on the deployment to verify setup. A healthy multiplayer backend returns:
+
+```json
+{"ok":true,"database":"ready","multiplayer":true}
+```
+
+If `DATABASE_URL` is absent or invalid, the start screen displays the configuration error and
+keeps Single Player available instead of letting Create Lobby fail mysteriously.
 
 ---
 

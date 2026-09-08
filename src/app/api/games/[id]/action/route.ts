@@ -1,11 +1,13 @@
 import { db } from "@/db";
+import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
 import {
   addPlayer,
-  advanceFire,
+  advanceWorld,
   applyRoll,
   GameState,
   logLinePublic,
+  normalizeState,
   publicState,
   rematch,
   startGame,
@@ -23,6 +25,12 @@ type Action =
   | { action: "leave"; pid: string; secret: string };
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    await ensureDatabase();
+  } catch (e) {
+    console.error("Game action database unavailable:", e);
+    return Response.json({ error: databaseError(e) }, { status: 503 });
+  }
   const { id } = await ctx.params;
   let body: Action;
   try {
@@ -34,11 +42,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
   const row = rows[0];
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
-  const state = row.state as unknown as GameState;
+  const state = normalizeState(row.state as unknown as GameState);
 
   const me = state.players.find((p) => p.id === body.pid);
   const isHost = me && me.id === state.hostId;
-  advanceFire(state, Date.now());
+  advanceWorld(state, Date.now());
 
   // A bot's turn may be driven by the (human) host of the lobby.
   const current = state.players[state.turn];

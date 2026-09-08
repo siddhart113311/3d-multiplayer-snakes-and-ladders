@@ -52,9 +52,15 @@ function sampleCurve(curve: THREE.CatmullRomCurve3, n: number): THREE.Vector3[] 
   return pts;
 }
 
+interface QueueJob {
+  /** Jobs sharing a tag are coalesced — only the newest survives. */
+  tag?: string;
+  run: () => Promise<void>;
+}
+
 export class Director {
   bridge: Bridge;
-  private queue: Array<() => Promise<void>> = [];
+  private queue: QueueJob[] = [];
   private tweens: Tween[] = [];
   private running = false;
   /** raised when a restart happened; page resyncs visuals */
@@ -89,7 +95,7 @@ export class Director {
     if (!this.running && this.queue.length > 0) {
       const job = this.queue.shift()!;
       this.running = true;
-      void job().then(() => {
+      void job.run().then(() => {
         this.running = false;
         if (this.queue.length === 0 && this.tweens.length === 0) {
           this.bridge.onIdle?.();
@@ -139,43 +145,58 @@ export class Director {
     for (const ev of events) {
       switch (ev.type) {
         case "roll":
-          this.queue.push(async () => {
-            sfx.diceRoll();
-            await this.tween(0.65, () => {});
-            sfx.diceLand(ev.dice);
+          this.queue.push({
+            run: async () => {
+              sfx.diceRoll();
+              await this.tween(0.65, () => {});
+              sfx.diceLand(ev.dice);
+            },
           });
           break;
         case "hop":
-          this.queue.push(() => this.animHop(ev.playerId, ev.path, colorOf(ev.playerId)));
+          this.queue.push({ run: () => this.animHop(ev.playerId, ev.path, colorOf(ev.playerId)) });
           break;
         case "ladder":
-          this.queue.push(() => this.animLadder(ev.playerId, ev.from, ev.to, colorOf(ev.playerId)));
+          this.queue.push({ run: () => this.animLadder(ev.playerId, ev.from, ev.to, colorOf(ev.playerId)) });
           break;
         case "snakeBite":
-          this.queue.push(() =>
-            ev.gulp
-              ? this.animGulp(ev.playerId, ev.snakeId, ev.from, ev.to, colorOf(ev.playerId), 0.2)
-              : this.animSlide(ev.playerId, ev.snakeId, ev.to, colorOf(ev.playerId))
-          );
+          this.queue.push({
+            run: () =>
+              ev.gulp
+                ? this.animGulp(ev.playerId, ev.snakeId, ev.from, ev.to, colorOf(ev.playerId), 0.2)
+                : this.animSlide(ev.playerId, ev.snakeId, ev.to, colorOf(ev.playerId)),
+          });
           break;
         case "snakeShift":
-          this.queue.push(() => this.animShift(ev));
+          this.queue.push({ run: () => this.animShift(ev) });
           break;
+        case "snakeCreep": {
+          // Stalking ticks arrive every ~2.6s. If one is still queued, drop it —
+          // positions are reconciled from authoritative state on idle, so the
+          // queue can never outrun the hunt.
+          this.queue = this.queue.filter((j) => j.tag !== "creep");
+          this.queue.push({ tag: "creep", run: () => this.animCreep(ev, colorOf) });
+          break;
+        }
         case "win":
-          this.queue.push(async () => {
-            sfx.win();
-            this.shake(0.35);
-            const p = cellWorld(this.bridge.def, this.bridge.def.last, CELL_Y + 0.5);
-            this.bridge.burst?.(p, "#fbbf24", 90, 4.2);
-            this.bridge.burst?.(p, "#ffffff", 40, 3.2);
-            this.bridge.onWin?.(ev.playerId);
-            await this.tween(0.8, () => {});
+          this.queue.push({
+            run: async () => {
+              sfx.win();
+              this.shake(0.35);
+              const p = cellWorld(this.bridge.def, this.bridge.def.last, CELL_Y + 0.5);
+              this.bridge.burst?.(p, "#fbbf24", 90, 4.2);
+              this.bridge.burst?.(p, "#ffffff", 40, 3.2);
+              this.bridge.onWin?.(ev.playerId);
+              await this.tween(0.8, () => {});
+            },
           });
           break;
         case "restart":
-          this.queue.push(async () => {
-            this.needsResync = true;
-            await this.tween(0.1, () => {});
+          this.queue.push({
+            run: async () => {
+              this.needsResync = true;
+              await this.tween(0.1, () => {});
+            },
           });
           break;
         case "start":
@@ -369,6 +390,52 @@ export class Director {
   private bundleBurst(p: THREE.Vector3, color: string) {
     this.bridge.burst?.(p, color, 24, 2.6);
     this.bridge.burst?.(p, "#ffffff", 10, 1.6);
+  }
+
+  /**
+   * Hunt-mode: the whole stalking pack glides one cell closer, together.
+   * Animating them in a single tween (rather than one job per snake) keeps the
+   * batch well inside the hunt interval.
+   */
+  private async animCreep(ev: Extract<GameEvent, { type: "snakeCreep" }>, colorOf: (pid: string) => string) {
+    const lanes: Array<{ vis: SnakeVisual; from: THREE.Vector3[]; to: THREE.Vector3[] }> = [];
+    for (const mv of ev.moves) {
+      const vis = this.snake(mv.snake.id);
+      if (!vis) continue;
+      const target = buildSnakeCurve(this.bridge.def, mv.snake);
+      lanes.push({ vis, from: sampleCurve(vis.curve, 22), to: sampleCurve(target.curve, 22) });
+    }
+
+    if (lanes.length) {
+      sfx.hiss(0.55);
+      await this.tween(0.72, (t) => {
+        for (const lane of lanes) {
+          const K = lane.from.length;
+          const pts: THREE.Vector3[] = [];
+          for (let i = 0; i < K; i++) {
+            // slight head-to-tail lag reads as a body-following-head slither
+            const lag = (i / K) * 0.28;
+            const local = Math.min(1, Math.max(0, (t - lag) / (1 - 0.28)));
+            const e = easeInOut(local);
+            const p = new THREE.Vector3().lerpVectors(lane.from[i], lane.to[i], e);
+            p.y += Math.sin(local * Math.PI) * 0.09;
+            pts.push(p);
+          }
+          lane.vis.curve = new THREE.CatmullRomCurve3(pts, false, "centripetal", 0.5);
+          lane.vis.version += 1;
+          // jaws part as they close in
+          lane.vis.mouth = 0.2 + Math.sin(t * Math.PI) * 0.3;
+        }
+      });
+      for (const lane of lanes) {
+        lane.vis.mouth = 0;
+      }
+    }
+
+    for (const g of ev.gulped) {
+      this.shake(0.14);
+      await this.animGulp(g.playerId, g.snakeId, g.from, g.to, colorOf(g.playerId), 0.22);
+    }
   }
 
   /** Fire-mode: a snake leaves its spot and slithers across the board. */

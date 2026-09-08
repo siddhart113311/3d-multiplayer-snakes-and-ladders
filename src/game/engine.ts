@@ -2,10 +2,10 @@
 // State lives as a JSON document; every mutation appends events that clients
 // replay locally for smooth, perfectly synced 3D animation.
 
-import { BoardShape, BoardSize, clampSize, DEFAULT_SIZE, getBoard, nearestCell } from "./boards";
+import { BoardShape, BoardSize, cellNeighbors, clampSize, DEFAULT_SIZE, getBoard, nearestCell } from "./boards";
 import { hashStr, mulberry32, rollDice, secureRand, uuid } from "./rng";
 
-export type GameMode = "classic" | "fire";
+export type GameMode = "classic" | "fire" | "hunt";
 
 export interface Player {
   id: string;
@@ -26,6 +26,8 @@ export interface Snake {
   id: number;
   head: number;
   tail: number;
+  /** Body length in world units — preserved while the snake crawls in hunt mode. */
+  span?: number;
 }
 
 export interface ChatMessage {
@@ -60,7 +62,38 @@ const BOT_TAUNTS = {
   selfBitten: ["…okay that one hurt", "Rigged dice, I swear", "I meant to do that", "Ow."],
 };
 
+export function normalizeState(state: GameState): GameState {
+  // Backward compatibility for JSONB rows written by earlier app versions.
+  state.size = clampSize(state.size ?? DEFAULT_SIZE);
+  state.players ??= [];
+  state.snakes ??= [];
+  state.ladders ??= [];
+  state.events ??= [];
+  state.log ??= [];
+  state.chat ??= [];
+  state.scores ??= {};
+  state.seq ??= 0;
+  state.moveCount ??= 0;
+  state.turn ??= 0;
+  state.dice ??= 0;
+  state.fireCursor ??= 0;
+  state.fireIntervalMs ??= FIRE_INTERVAL;
+  state.nextSnakeAt ??= 0;
+  state.huntIntervalMs ??= HUNT_INTERVAL;
+  state.nextCreepAt ??= 0;
+  state.lastActionAt ??= 0;
+  for (const p of state.players) {
+    p.pos ??= -1;
+    p.finished ??= false;
+    p.finishOrder ??= 0;
+    p.ladders ??= 0;
+    p.gulped ??= 0;
+  }
+  return state;
+}
+
 export function addChat(state: GameState, msg: Omit<ChatMessage, "id" | "at">): ChatMessage {
+  normalizeState(state);
   const full: ChatMessage = { ...msg, id: uuid(), at: Date.now() };
   state.chat.push(full);
   if (state.chat.length > MAX_CHAT) state.chat.splice(0, state.chat.length - MAX_CHAT);
@@ -95,6 +128,13 @@ export type GameEvent =
       prev: Snake;
       gulped: Array<{ playerId: string; from: number; to: number }>;
     }
+  | {
+      seq: number;
+      type: "snakeCreep";
+      /** All stalking snakes move in one batch so clients animate them together. */
+      moves: Array<{ snake: Snake; prev: Snake }>;
+      gulped: Array<{ playerId: string; snakeId: number; from: number; to: number }>;
+    }
   | { seq: number; type: "win"; playerId: string }
   | { seq: number; type: "restart" }
   | { seq: number; type: "start" };
@@ -119,6 +159,8 @@ export interface GameState {
   fireCursor: number;
   fireIntervalMs: number;
   nextSnakeAt: number; // epoch ms (fire mode)
+  huntIntervalMs: number;
+  nextCreepAt: number; // epoch ms (hunt mode)
   startedAt: number | null;
   finishedAt: number | null;
   lastActionAt: number;
@@ -128,6 +170,9 @@ export interface GameState {
 export const PLAYER_COLORS = ["#ff4d5e", "#38bdf8", "#fbbf24", "#a78bfa"];
 export const MAX_PLAYERS = 4;
 export const FIRE_INTERVAL = 18000;
+/** Hunt mode: how often the stalking pack advances, and how many snakes hunt. */
+export const HUNT_INTERVAL = 2600;
+export const HUNT_SNAKES = 5;
 const BOT_NAMES = ["Viper", "Kaa", "Nagini", "Scales", "Basilisk", "Slyther"];
 
 type EventPayload = { [K in GameEvent["type"]]: Extract<GameEvent, { type: K }> extends infer E ? (E extends { seq: number } ? Omit<E, "seq"> : never) : never }[GameEvent["type"]];
@@ -210,9 +255,16 @@ export function genFeatures(shape: BoardShape, seedKey?: string, size: BoardSize
       used.delete(head);
       continue;
     }
-    snakes.push({ id: i, head, tail });
+    snakes.push({ id: i, head, tail, span: cellDistance(def, head, tail) });
   }
   return { snakes, ladders };
+}
+
+/** World-space distance between two cells. */
+function cellDistance(def: ReturnType<typeof getBoard>, a: number, b: number): number {
+  const ca = def.cells[Math.max(0, Math.min(def.last, a))];
+  const cb = def.cells[Math.max(0, Math.min(def.last, b))];
+  return Math.hypot(ca.x - cb.x, ca.z - cb.z);
 }
 
 export function createState(board: BoardShape, mode: GameMode, code: string, size: BoardSize = DEFAULT_SIZE): GameState {
@@ -240,6 +292,8 @@ export function createState(board: BoardShape, mode: GameMode, code: string, siz
     fireCursor: 0,
     fireIntervalMs: FIRE_INTERVAL,
     nextSnakeAt: 0,
+    huntIntervalMs: HUNT_INTERVAL,
+    nextCreepAt: 0,
     startedAt: null,
     finishedAt: null,
     lastActionAt: 0,
@@ -273,8 +327,9 @@ export function startGame(state: GameState) {
   state.startedAt = Date.now();
   state.dice = 0;
   state.nextSnakeAt = Date.now() + state.fireIntervalMs;
+  state.nextCreepAt = Date.now() + (state.huntIntervalMs || HUNT_INTERVAL);
   pushEvent(state, { type: "start" });
-  logLine(state, "Game started — good luck!");
+  logLine(state, state.mode === "hunt" ? "The pack has your scent — run!" : "Game started — good luck!");
 }
 
 export function computeScores(state: GameState) {
@@ -299,7 +354,7 @@ export function computeScores(state: GameState) {
         efficiency +
         p.ladders * 45 -
         p.gulped * 20 +
-        (state.mode === "fire" ? 200 : 0)
+        (state.mode === "fire" ? 200 : state.mode === "hunt" ? 275 : 0)
     );
   }
 }
@@ -445,6 +500,121 @@ export function applyRoll(state: GameState, playerId: string, throttleMs = 400):
 }
 
 /** Fire-mode: migrate one snake when its timer elapses, gulping players on its path. */
+/**
+ * Pick the neighbouring cell that gets closest to `target`, subject to `allow`.
+ * Returns `from` unchanged when no neighbour is an improvement.
+ */
+function stepToward(
+  def: ReturnType<typeof getBoard>,
+  from: number,
+  target: { x: number; z: number },
+  allow: (idx: number) => boolean
+): number {
+  const here = def.cells[from];
+  let best = from;
+  let bestD = Math.hypot(here.x - target.x, here.z - target.z);
+  for (const n of cellNeighbors(def, from)) {
+    if (!allow(n)) continue;
+    const c = def.cells[n];
+    const d = Math.hypot(c.x - target.x, c.z - target.z);
+    if (d < bestD - 1e-6) {
+      bestD = d;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/** One stalking tick: the nearest snakes each crawl a single cell toward the prey. */
+function creepOnce(state: GameState, def: ReturnType<typeof getBoard>) {
+  const last = def.last;
+  const onBoard = state.players.filter((p) => !p.finished && p.pos >= 0);
+  if (onBoard.length === 0 || state.snakes.length === 0) return;
+
+  // The pack focuses on whoever is about to move; otherwise the leader.
+  const current = state.players[state.turn];
+  const prey =
+    current && !current.finished && current.pos >= 0
+      ? current
+      : onBoard.reduce((a, b) => (b.pos > a.pos ? b : a));
+  const preyPos = def.cells[prey.pos];
+
+  const blocked = new Set<number>([0, last]);
+  for (const l of state.ladders) {
+    blocked.add(l.bottom);
+    blocked.add(l.top);
+  }
+  const heads = new Set(state.snakes.map((s) => s.head));
+
+  // Only the closest few actually hunt — the rest stay put as normal hazards.
+  const pack = [...state.snakes]
+    .map((s) => ({ s, d: cellDistance(def, s.head, prey.pos) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, Math.min(HUNT_SNAKES, state.snakes.length));
+
+  const moves: Array<{ snake: Snake; prev: Snake }> = [];
+  const gulped: Array<{ playerId: string; snakeId: number; from: number; to: number }> = [];
+
+  for (const { s } of pack) {
+    const prev: Snake = { ...s };
+    s.span ??= cellDistance(def, s.head, s.tail);
+
+    // Head crawls one cell closer. Staying above its own tail keeps the snake
+    // pointing down-board, so a gulp can never fling a player *forward*.
+    heads.delete(s.head);
+    const nextHead = stepToward(def, s.head, preyPos, (i) => !blocked.has(i) && !heads.has(i) && i > s.tail + 1);
+    s.head = nextHead;
+    heads.add(nextHead);
+
+    // Body trails: the tail only creeps up when the head has stretched it.
+    const prevHeadPos = def.cells[prev.head];
+    let guard = 0;
+    while (cellDistance(def, s.head, s.tail) > s.span * 1.12 && guard++ < 3) {
+      const nextTail = stepToward(def, s.tail, prevHeadPos, (i) => i >= 1 && i < s.head - 1);
+      if (nextTail === s.tail) break;
+      s.tail = nextTail;
+    }
+
+    // Anything standing where the head landed is swallowed.
+    for (const p of state.players) {
+      if (p.finished || p.pos < 0) continue;
+      if (p.pos === s.head) {
+        gulped.push({ playerId: p.id, snakeId: s.id, from: p.pos, to: s.tail });
+        p.pos = s.tail;
+        p.gulped += 1;
+        logLine(state, `${p.name} was run down and gulped!`);
+      }
+    }
+
+    if (prev.head !== s.head || prev.tail !== s.tail) moves.push({ snake: { ...s }, prev });
+  }
+
+  if (moves.length || gulped.length) {
+    pushEvent(state, { type: "snakeCreep", moves, gulped });
+  }
+}
+
+/** Hunt mode: the pack closes in on its prey a cell at a time. */
+export function advanceHunt(state: GameState, now: number) {
+  if (state.mode !== "hunt" || state.status !== "playing" || !state.nextCreepAt) return;
+  if (now < state.nextCreepAt) return;
+  const def = getBoard(state.board, clampSize(state.size ?? DEFAULT_SIZE));
+  const interval = state.huntIntervalMs || HUNT_INTERVAL;
+  let iterations = 0;
+  while (now >= state.nextCreepAt && iterations < 3) {
+    iterations += 1;
+    state.nextCreepAt += interval;
+    creepOnce(state, def);
+  }
+  if (now >= state.nextCreepAt) state.nextCreepAt = now + interval;
+}
+
+/** Advance every time-driven hazard for the active mode. */
+export function advanceWorld(state: GameState, now: number) {
+  advanceFire(state, now);
+  advanceHunt(state, now);
+}
+
 export function advanceFire(state: GameState, now: number) {
   if (state.mode !== "fire" || state.status !== "playing" || !state.nextSnakeAt) return;
   if (now < state.nextSnakeAt) return;
@@ -532,12 +702,14 @@ export function rematch(state: GameState, code: string) {
   state.startedAt = Date.now();
   state.finishedAt = null;
   state.nextSnakeAt = Date.now() + state.fireIntervalMs;
+  state.nextCreepAt = Date.now() + (state.huntIntervalMs || HUNT_INTERVAL);
   pushEvent(state, { type: "restart" });
   logLine(state, "Rematch! Board reshuffled.");
 }
 
 /** Client-safe copy: strip player secrets, include "you" marker. */
 export function publicState(state: GameState, forPlayerId?: string) {
+  normalizeState(state);
   return {
     ...state,
     events: state.events.slice(-60),

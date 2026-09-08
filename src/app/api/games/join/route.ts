@@ -29,7 +29,7 @@ export async function POST(req: Request) {
 
     await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, row.id));
 
-    void triggerGameEvent(row.code, "lobby-updated", {
+    void triggerGameEvent([row.id, row.code], "lobby-updated", {
       code: row.code,
       state: publicState(state),
     });

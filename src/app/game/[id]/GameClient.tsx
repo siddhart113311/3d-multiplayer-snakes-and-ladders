@@ -213,14 +213,17 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     [syncSnakes]
   );
 
+  const processStateRef = useRef(processState);
+  processStateRef.current = processState;
+
   const fetchState = useCallback(async () => {
     try {
       const pid = credsRef.current?.pid ?? "";
-      processState(await request("get", pid, credsRef.current?.secret ?? ""));
+      processStateRef.current(await request("get", pid, credsRef.current?.secret ?? ""));
     } catch (e) {
       console.warn(e);
     }
-  }, [request, processState]);
+  }, [request]);
 
   // init
   useEffect(() => {
@@ -240,33 +243,45 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       }
     }
     void fetchState();
-    // solo still ticks (fire-mode timers advance locally) at 400ms; online multiplayer uses Pusher WebSockets with 8s fallback poll
-    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 8000);
+    // solo ticks at 400ms; online multiplayer uses Pusher WebSockets with a snappy 2s fallback poll
+    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 2000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
   // Real-time Pusher WebSockets updates for online multiplayer
   useEffect(() => {
-    if (localRef.current || !code) return;
+    if (localRef.current || !gameId) return;
 
     const pusher = getPusherClient();
     if (!pusher) return;
 
-    const channelName = `game-${code.toUpperCase()}`;
-    const channel = pusher.subscribe(channelName);
-
-    channel.bind("game-updated", (data: FetchResp) => {
+    const onGameUpdated = (data: FetchResp) => {
       if (data?.state) {
-        processState(data);
+        processStateRef.current(data);
       }
-    });
+    };
+
+    const idChannel = `game-${gameId.toUpperCase()}`;
+    const channel1 = pusher.subscribe(idChannel);
+    channel1.bind("game-updated", onGameUpdated);
+
+    let channel2: ReturnType<typeof pusher.subscribe> | null = null;
+    if (code) {
+      const codeChannel = `game-${code.toUpperCase()}`;
+      channel2 = pusher.subscribe(codeChannel);
+      channel2.bind("game-updated", onGameUpdated);
+    }
 
     return () => {
-      channel.unbind("game-updated");
-      pusher.unsubscribe(channelName);
+      channel1.unbind("game-updated", onGameUpdated);
+      pusher.unsubscribe(idChannel);
+      if (channel2) {
+        channel2.unbind("game-updated", onGameUpdated);
+        pusher.unsubscribe(`game-${code.toUpperCase()}`);
+      }
     };
-  }, [code, processState]);
+  }, [gameId, code]);
 
   // director ticker — also publishes "is the board still animating?" so the
   // game-over screen can wait for the winning move to finish playing.

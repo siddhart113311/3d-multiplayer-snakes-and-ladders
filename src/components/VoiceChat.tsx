@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
+  StartAudio,
   useLocalParticipant,
   useParticipants,
   useSpeakingParticipants,
@@ -116,6 +117,7 @@ export default function VoiceChat({
       className="flex items-center"
     >
       <RoomAudioRenderer />
+      <StartAudio label="Click to allow voice" />
       <VoiceControls
         compact={compact}
         onDisconnect={disconnectVoice}
@@ -146,7 +148,11 @@ function VoiceControls({
 
   const toggleMic = useCallback(async () => {
     try {
-      await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+      await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled, {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
     } catch (e) {
       console.warn("Failed to toggle microphone:", e);
     }
@@ -160,7 +166,7 @@ function VoiceControls({
       {/* Mic toggle */}
       <button
         onClick={() => void toggleMic()}
-        title={isMicrophoneEnabled ? "Mute Microphone" : "Unmute Microphone"}
+        title={isMicrophoneEnabled ? "Click to Mute" : "Click to Unmute"}
         className={`relative flex items-center gap-1.5 font-bold transition border backdrop-blur-md ${
           compact
             ? "rounded-xl px-2.5 py-2 text-[10px]"
@@ -178,7 +184,13 @@ function VoiceControls({
         ) : (
           <MicOff className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
         )}
-        <span>{isMicrophoneEnabled ? (isLocalSpeaking ? "Talking" : "Mute") : "Unmuted"}</span>
+        <span>
+          {isMicrophoneEnabled
+            ? isLocalSpeaking
+              ? "Talking"
+              : "Mic On"
+            : "Muted"}
+        </span>
         {isLocalSpeaking && (
           <span className="absolute -top-1 -right-1 flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />

@@ -113,14 +113,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .where(eq(games.id, id));
 
   const pubForBroadcast = publicState(state);
-  void triggerGameEvent(row.code, "game-updated", {
+  const targets = [id, row.code];
+
+  void triggerGameEvent(targets, "game-updated", {
     code: row.code,
     state: pubForBroadcast,
     serverNow: Date.now(),
   });
 
   if (state.status === "waiting" || body.action === "start") {
-    void triggerGameEvent(row.code, "lobby-updated", {
+    void triggerGameEvent(targets, "lobby-updated", {
       code: row.code,
       state: pubForBroadcast,
       serverNow: Date.now(),

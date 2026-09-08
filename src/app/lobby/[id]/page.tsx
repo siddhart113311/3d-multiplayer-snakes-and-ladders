@@ -80,38 +80,60 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     [id, router]
   );
 
+  const handleLobbyStateRef = useRef(handleLobbyState);
+  handleLobbyStateRef.current = handleLobbyState;
+  const codeRef = useRef(code);
+  codeRef.current = code;
+
   const poll = useCallback(async () => {
     try {
       const c = credsRef.current ?? loadCreds(id);
       const data = await api<{ code: string; state: LobbyState }>(`/api/games/${id}?pid=${c?.pid ?? ""}`);
-      handleLobbyState(data.code, data.state);
+      handleLobbyStateRef.current(data.code, data.state);
     } catch {
       setErr("Lobby not found");
     }
-  }, [id, handleLobbyState]);
+  }, [id]);
 
   useEffect(() => {
     void poll();
-    // Relaxed fallback poll every 8 seconds
-    const iv = setInterval(() => void poll(), 8000);
+    // Snappy fallback poll every 2.5 seconds
+    const iv = setInterval(() => void poll(), 2500);
 
     const pusher = getPusherClient();
-    if (pusher && code) {
-      const channel = pusher.subscribe(`game-${code.toUpperCase()}`);
-      channel.bind("lobby-updated", (data: { code?: string; state?: LobbyState }) => {
+    if (pusher && id) {
+      const channelId = pusher.subscribe(`game-${id.toUpperCase()}`);
+      const onUpdate = (data: { code?: string; state?: LobbyState }) => {
         if (data?.state) {
-          handleLobbyState(data.code ?? code, data.state);
+          handleLobbyStateRef.current(data.code ?? codeRef.current, data.state);
         }
-      });
+      };
+
+      channelId.bind("lobby-updated", onUpdate);
+      channelId.bind("game-updated", onUpdate);
+
+      let channelCode: ReturnType<typeof pusher.subscribe> | null = null;
+      if (code) {
+        channelCode = pusher.subscribe(`game-${code.toUpperCase()}`);
+        channelCode.bind("lobby-updated", onUpdate);
+        channelCode.bind("game-updated", onUpdate);
+      }
+
       return () => {
         clearInterval(iv);
-        channel.unbind("lobby-updated");
-        pusher.unsubscribe(`game-${code.toUpperCase()}`);
+        channelId.unbind("lobby-updated", onUpdate);
+        channelId.unbind("game-updated", onUpdate);
+        pusher.unsubscribe(`game-${id.toUpperCase()}`);
+        if (channelCode) {
+          channelCode.unbind("lobby-updated", onUpdate);
+          channelCode.unbind("game-updated", onUpdate);
+          pusher.unsubscribe(`game-${code.toUpperCase()}`);
+        }
       };
     }
 
     return () => clearInterval(iv);
-  }, [poll, code, handleLobbyState]);
+  }, [poll, id, code]);
 
   const currentCreds = credsRef.current ?? creds;
   const me = state?.players.find((p) => p.you);
@@ -124,8 +146,13 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     const current = credsRef.current ?? creds ?? loadCreds(id);
     if (!current) return;
     try {
-      await api(`/api/games/${id}/action`, { pid: current.pid, secret: current.secret, ...body });
-      await poll();
+      const res = await api<{ ok: boolean; code?: string; state?: LobbyState }>(
+        `/api/games/${id}/action`,
+        { pid: current.pid, secret: current.secret, ...body }
+      );
+      if (res?.state) {
+        handleLobbyStateRef.current(res.code ?? code, res.state);
+      }
     } catch (e) {
       setErr((e as Error).message);
       setTimeout(() => setErr(""), 2500);

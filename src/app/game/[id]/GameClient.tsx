@@ -20,6 +20,7 @@ import type { ParticlesHandle } from "@/components/three/Particles";
 import { getPusherClient } from "@/lib/pusher/client";
 
 const Scene = dynamic(() => import("@/components/three/Scene"), { ssr: false });
+const VoiceChat = dynamic(() => import("@/components/VoiceChat"), { ssr: false });
 
 interface PubPlayer extends HudPlayer {}
 interface PubEvent {
@@ -78,6 +79,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const [flatView, setFlatView] = useState(false);
   // true while the Director still has queued choreography to play out
   const [animating, setAnimating] = useState(false);
+  const [speakingPlayerIds, setSpeakingPlayerIds] = useState<string[]>([]);
 
   const bridgeRef = useRef<Bridge | null>(null);
   const directorRef = useRef<Director | null>(null);
@@ -567,7 +569,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
         }}
       >
         <div className="flex items-start justify-between gap-2 md:gap-3">
-          <PlayerTray players={pub.players} turnId={current?.id ?? ""} last={def.last} compact={vp.isPhone} />
+          <PlayerTray
+            players={pub.players}
+            turnId={current?.id ?? ""}
+            last={def.last}
+            compact={vp.isPhone}
+            speakingPlayerIds={speakingPlayerIds}
+          />
           <div className="flex flex-col items-end gap-1.5 md:gap-2">
             <div className="pointer-events-auto flex items-center gap-1.5 md:gap-2">
               <ChatDock
@@ -587,6 +595,17 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
                 flatView={flatView}
                 onToggleView={toggleView}
                 compact={vp.isPhone}
+                voiceSlot={
+                  !isSolo && code && me ? (
+                    <VoiceChat
+                      roomCode={code}
+                      playerName={me.name}
+                      playerId={me.id}
+                      compact={vp.isPhone}
+                      onSpeakingChange={setSpeakingPlayerIds}
+                    />
+                  ) : undefined
+                }
               />
             </div>
             {pub.mode === "fire" && pub.status === "playing" && (

@@ -89,6 +89,9 @@ export function normalizeState(state: GameState): GameState {
     p.ladders ??= 0;
     p.gulped ??= 0;
   }
+  if (!state.hostId && state.players[0]) {
+    state.hostId = state.players[0].id;
+  }
   return state;
 }
 

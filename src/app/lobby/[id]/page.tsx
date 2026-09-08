@@ -1,13 +1,16 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, Check, Copy, Crosshair, Crown, Flame, Home, Play, Trash2, Users } from "lucide-react";
 import { api, loadCreds, PlayerCreds } from "@/lib/api";
 import { BoardShape, cellCount, clampSize, DEFAULT_SIZE, sizeLabel } from "@/game/boards";
 import { sfx } from "@/game/sounds";
 import { getPusherClient } from "@/lib/pusher/client";
+
+const VoiceChat = dynamic(() => import("@/components/VoiceChat"), { ssr: false });
 
 interface LobbyPlayer {
   id: string;
@@ -43,21 +46,30 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
   const [state, setState] = useState<LobbyState | null>(null);
   const [code, setCode] = useState("");
   const [creds, setCreds] = useState<PlayerCreds | null>(null);
+  const credsRef = useRef<PlayerCreds | null>(null);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    setCreds(loadCreds(id));
+    const c = loadCreds(id);
+    if (c) {
+      credsRef.current = c;
+      setCreds(c);
+    }
   }, [id]);
 
   const handleLobbyState = useCallback(
     (dataCode: string, st: LobbyState) => {
       setCode(dataCode);
-      const c = loadCreds(id);
+      const c = credsRef.current ?? loadCreds(id);
+      if (c && !credsRef.current) {
+        credsRef.current = c;
+        setCreds(c);
+      }
       const taggedPlayers = st.players.map((p) => ({
         ...p,
-        you: p.id === c?.pid,
+        you: Boolean(c?.pid && p.id === c.pid),
       }));
       const updatedState = { ...st, players: taggedPlayers };
       setState(updatedState);
@@ -70,7 +82,7 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
 
   const poll = useCallback(async () => {
     try {
-      const c = loadCreds(id);
+      const c = credsRef.current ?? loadCreds(id);
       const data = await api<{ code: string; state: LobbyState }>(`/api/games/${id}?pid=${c?.pid ?? ""}`);
       handleLobbyState(data.code, data.state);
     } catch {
@@ -101,13 +113,18 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     return () => clearInterval(iv);
   }, [poll, code, handleLobbyState]);
 
+  const currentCreds = credsRef.current ?? creds;
   const me = state?.players.find((p) => p.you);
-  const isHost = me && me.id === state?.hostId;
+  const isHost = Boolean(
+    (me && me.id === state?.hostId) ||
+    (currentCreds?.pid && state?.hostId && currentCreds.pid === state.hostId)
+  );
 
   const action = async (body: Record<string, unknown>) => {
-    if (!creds) return;
+    const current = credsRef.current ?? creds ?? loadCreds(id);
+    if (!current) return;
     try {
-      await api(`/api/games/${id}/action`, { pid: creds.pid, secret: creds.secret, ...body });
+      await api(`/api/games/${id}/action`, { pid: current.pid, secret: current.secret, ...body });
       await poll();
     } catch (e) {
       setErr((e as Error).message);
@@ -138,9 +155,19 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
           <h1 className="font-display text-xl font-black tracking-wide text-white">
             SERPENTIA <span className="text-emerald-400">LOBBY</span>
           </h1>
-          <button onClick={() => router.push("/")} className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/70 hover:bg-white/10">
-            <Home className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {code && me && (
+              <VoiceChat
+                roomCode={code}
+                playerName={me.name}
+                playerId={me.id}
+                compact
+              />
+            )}
+            <button onClick={() => router.push("/")} className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/70 hover:bg-white/10">
+              <Home className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* join code */}

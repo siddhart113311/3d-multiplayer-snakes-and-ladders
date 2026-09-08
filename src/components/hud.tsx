@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Pause, Play, Skull, Swords, Trophy, Volume2, VolumeX } from "lucide-react";
+import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Mic, Pause, Play, Skull, Swords, Trophy, Volume2, VolumeX } from "lucide-react";
 import DiceCube from "./DiceCube";
 
 export interface HudPlayer {
@@ -22,11 +22,13 @@ export function PlayerTray({
   turnId,
   last,
   compact = false,
+  speakingPlayerIds = [],
 }: {
   players: HudPlayer[];
   turnId: string;
   last: number;
   compact?: boolean;
+  speakingPlayerIds?: string[];
 }) {
   if (compact) {
     // Phones: a single horizontal strip of pills instead of a tall column,
@@ -35,11 +37,16 @@ export function PlayerTray({
       <div className="pointer-events-none flex max-w-[62vw] flex-wrap gap-1.5">
         {players.map((p) => {
           const active = p.id === turnId;
+          const isSpeaking = speakingPlayerIds.includes(p.id);
           return (
             <div
               key={p.id}
               className={`flex items-center gap-1.5 rounded-full border px-2 py-1 backdrop-blur-md ${
-                active ? "border-white/40 bg-white/20" : "border-white/10 bg-black/40"
+                isSpeaking
+                  ? "border-emerald-400/80 bg-emerald-500/25 shadow-[0_0_12px_rgba(52,211,153,0.4)]"
+                  : active
+                  ? "border-white/40 bg-white/20"
+                  : "border-white/10 bg-black/40"
               }`}
             >
               <span
@@ -47,6 +54,7 @@ export function PlayerTray({
                 style={{ background: p.color, boxShadow: `0 0 8px ${p.color}` }}
               />
               <span className="max-w-[52px] truncate text-[10px] font-bold text-white">{p.name}</span>
+              {isSpeaking && <Volume2 className="h-3 w-3 text-emerald-300 animate-pulse" />}
               <span className="font-mono text-[10px] text-white/60">{p.pos < 0 ? "–" : p.pos + 1}</span>
               {p.finishOrder === 1 && <Crown className="h-3 w-3 text-amber-300" />}
             </div>
@@ -61,6 +69,7 @@ export function PlayerTray({
       <AnimatePresence>
         {players.map((p) => {
           const active = p.id === turnId;
+          const isSpeaking = speakingPlayerIds.includes(p.id);
           return (
             <motion.div
               key={p.id}
@@ -68,7 +77,11 @@ export function PlayerTray({
               initial={{ x: -30, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               className={`flex items-center gap-2.5 rounded-2xl border px-3 py-2 backdrop-blur-md transition-colors duration-300 ${
-                active ? "border-white/30 bg-white/15 shadow-[0_0_24px_rgba(255,255,255,0.12)]" : "border-white/10 bg-black/35"
+                isSpeaking
+                  ? "border-emerald-400/70 bg-emerald-950/40 shadow-[0_0_20px_rgba(52,211,153,0.3)]"
+                  : active
+                  ? "border-white/30 bg-white/15 shadow-[0_0_24px_rgba(255,255,255,0.12)]"
+                  : "border-white/10 bg-black/35"
               }`}
             >
               <div
@@ -81,6 +94,12 @@ export function PlayerTray({
                     {p.name}
                     {p.you && <span className="ml-1 text-[10px] font-bold text-emerald-300">YOU</span>}
                   </span>
+                  {isSpeaking && (
+                    <span className="flex items-center gap-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/40 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300 animate-pulse">
+                      <Volume2 className="h-2.5 w-2.5" />
+                      SPEAKING
+                    </span>
+                  )}
                   {p.isBot && <span className="rounded bg-white/10 px-1 text-[9px] font-bold tracking-wider text-slate-300">BOT</span>}
                   {p.finishOrder === 1 && <Crown className="h-3.5 w-3.5 text-amber-300" />}
                 </div>
@@ -260,6 +279,7 @@ export function TopBar({
   flatView,
   onToggleView,
   compact = false,
+  voiceSlot,
 }: {
   code: string;
   mode: string;
@@ -270,6 +290,7 @@ export function TopBar({
   flatView: boolean;
   onToggleView: () => void;
   compact?: boolean;
+  voiceSlot?: React.ReactNode;
 }) {
   const btn = compact
     ? "rounded-xl border border-white/10 bg-black/45 p-2 text-white/80 backdrop-blur-md active:bg-white/15"
@@ -288,6 +309,7 @@ export function TopBar({
         )}
         <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/60">{code}</span>
       </div>
+      {voiceSlot}
       <button
         onClick={onToggleView}
         title={flatView ? "Switch to 3D view" : "Switch to 2D top-down view"}

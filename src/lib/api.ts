@@ -22,14 +22,20 @@ const KEY = (gameId: string) => `serp_player_${gameId}`;
 
 export function saveCreds(gameId: string, creds: PlayerCreds) {
   try {
-    window.localStorage.setItem(KEY(gameId), JSON.stringify(creds));
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(KEY(gameId), JSON.stringify(creds));
+      window.localStorage.setItem(KEY(gameId), JSON.stringify(creds));
+    }
   } catch {}
 }
 
 export function loadCreds(gameId: string): PlayerCreds | null {
   try {
-    const raw = window.localStorage.getItem(KEY(gameId));
-    return raw ? (JSON.parse(raw) as PlayerCreds) : null;
+    if (typeof window === "undefined") return null;
+    const sessionRaw = window.sessionStorage.getItem(KEY(gameId));
+    if (sessionRaw) return JSON.parse(sessionRaw) as PlayerCreds;
+    const localRaw = window.localStorage.getItem(KEY(gameId));
+    return localRaw ? (JSON.parse(localRaw) as PlayerCreds) : null;
   } catch {
     return null;
   }

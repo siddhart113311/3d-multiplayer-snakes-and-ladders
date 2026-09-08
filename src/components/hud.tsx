@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Mic, Pause, Play, Skull, Swords, Trophy, Volume2, VolumeX } from "lucide-react";
+import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Mic, Pause, Play, Skull, Swords, Trash2, Trophy, Volume2, VolumeX } from "lucide-react";
 import DiceCube from "./DiceCube";
 
 export interface HudPlayer {
@@ -342,11 +342,15 @@ export function PauseOverlay({
   onQuit,
   muted,
   onMute,
+  isHost = false,
+  onDestroy,
 }: {
   onResume: () => void;
   onQuit: () => void;
   muted: boolean;
   onMute: () => void;
+  isHost?: boolean;
+  onDestroy?: () => void;
 }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -366,7 +370,15 @@ export function PauseOverlay({
         <button onClick={onMute} className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 py-3 text-sm font-bold text-white/80">
           {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />} {muted ? "Unmute" : "Mute"}
         </button>
-        <button onClick={onQuit} className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 py-3 text-sm font-bold text-rose-300">
+        {isHost && onDestroy && (
+          <button
+            onClick={onDestroy}
+            className="flex items-center justify-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/15 py-3 text-sm font-bold text-rose-300 transition hover:bg-rose-500/25 hover:border-rose-500/50"
+          >
+            <Trash2 className="h-4 w-4" /> Terminate & Delete Game
+          </button>
+        )}
+        <button onClick={onQuit} className="flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 py-3 text-sm font-bold text-slate-300 hover:text-white">
           <LogOut className="h-4 w-4" /> Quit to menu
         </button>
       </motion.div>

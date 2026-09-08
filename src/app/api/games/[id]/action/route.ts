@@ -15,6 +15,8 @@ import {
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
+import { RoomServiceClient } from "livekit-server-sdk";
+
 export const dynamic = "force-dynamic";
 
 type Action =
@@ -23,7 +25,8 @@ type Action =
   | { action: "rematch"; pid: string; secret: string }
   | { action: "addBot"; pid: string; secret: string }
   | { action: "removeBot"; pid: string; secret: string; botId: string }
-  | { action: "leave"; pid: string; secret: string };
+  | { action: "leave"; pid: string; secret: string }
+  | { action: "destroy"; pid: string; secret: string };
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -104,6 +107,33 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         logLinePublic(state, `${me.name} left`);
       }
       break;
+    }
+    case "destroy": {
+      if (!isHost) return Response.json({ error: "Only the host can terminate and delete the game" }, { status: 403 });
+
+      // 1. Broadcast game-destroyed over Pusher WebSockets to all connected clients
+      const targets = [id, row.code];
+      await triggerGameEvent(targets, "game-destroyed", {
+        code: row.code,
+        gameId: id,
+        reason: "The host has terminated and deleted this game.",
+      }).catch(() => undefined);
+
+      // 2. Delete LiveKit WebRTC Voice Chat room if configured
+      if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
+        try {
+          const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
+          const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
+          await roomService.deleteRoom(row.code.toUpperCase());
+        } catch (lkErr) {
+          console.warn("[LiveKit] deleteRoom failed:", lkErr);
+        }
+      }
+
+      // 3. Delete game completely from PostgreSQL database
+      await db.delete(games).where(eq(games.id, id));
+
+      return Response.json({ ok: true, destroyed: true, gameId: id, code: row.code });
     }
   }
 

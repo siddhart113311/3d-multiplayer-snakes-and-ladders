@@ -41,6 +41,15 @@ export function loadCreds(gameId: string): PlayerCreds | null {
   }
 }
 
+export function clearCreds(gameId: string) {
+  try {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(KEY(gameId));
+      window.localStorage.removeItem(KEY(gameId));
+    }
+  } catch {}
+}
+
 export function saveLocalScore(entry: { name: string; score: number; mode: string; board: string; at: number }) {
   try {
     const raw = window.localStorage.getItem("serp_scores");

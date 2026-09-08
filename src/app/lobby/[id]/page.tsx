@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, Check, Copy, Crosshair, Crown, Flame, Home, Play, Trash2, Users } from "lucide-react";
-import { api, loadCreds, PlayerCreds } from "@/lib/api";
+import { api, clearCreds, loadCreds, PlayerCreds, saveCreds } from "@/lib/api";
 import { BoardShape, cellCount, clampSize, DEFAULT_SIZE, sizeLabel } from "@/game/boards";
 import { sfx } from "@/game/sounds";
 import { getPusherClient } from "@/lib/pusher/client";
@@ -52,7 +52,17 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    const c = loadCreds(id);
+    let c = loadCreds(id);
+    if (!c && typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const qPid = params.get("pid");
+      const qSecret = params.get("secret");
+      const qName = params.get("name") || "Player";
+      if (qPid && qSecret) {
+        c = { pid: qPid, secret: qSecret, name: qName };
+        saveCreds(id, c);
+      }
+    }
     if (c) {
       credsRef.current = c;
       setCreds(c);
@@ -96,9 +106,8 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
   }, [id]);
 
   useEffect(() => {
+    // Fetch initial lobby state once on mount; all updates are pure WebSockets
     void poll();
-    // Snappy fallback poll every 2.5 seconds
-    const iv = setInterval(() => void poll(), 2500);
 
     const pusher = getPusherClient();
     if (pusher && id) {
@@ -109,31 +118,40 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
         }
       };
 
+      const onDestroyed = (data: { reason?: string }) => {
+        clearCreds(id);
+        setErr(data?.reason || "This lobby has been closed by the host.");
+        setTimeout(() => {
+          router.replace("/");
+        }, 1500);
+      };
+
       channelId.bind("lobby-updated", onUpdate);
       channelId.bind("game-updated", onUpdate);
+      channelId.bind("game-destroyed", onDestroyed);
 
       let channelCode: ReturnType<typeof pusher.subscribe> | null = null;
       if (code) {
         channelCode = pusher.subscribe(`game-${code.toUpperCase()}`);
         channelCode.bind("lobby-updated", onUpdate);
         channelCode.bind("game-updated", onUpdate);
+        channelCode.bind("game-destroyed", onDestroyed);
       }
 
       return () => {
-        clearInterval(iv);
         channelId.unbind("lobby-updated", onUpdate);
         channelId.unbind("game-updated", onUpdate);
+        channelId.unbind("game-destroyed", onDestroyed);
         pusher.unsubscribe(`game-${id.toUpperCase()}`);
         if (channelCode) {
           channelCode.unbind("lobby-updated", onUpdate);
           channelCode.unbind("game-updated", onUpdate);
+          channelCode.unbind("game-destroyed", onDestroyed);
           pusher.unsubscribe(`game-${code.toUpperCase()}`);
         }
       };
     }
-
-    return () => clearInterval(iv);
-  }, [poll, id, code]);
+  }, [poll, id, code, router]);
 
   const currentCreds = credsRef.current ?? creds;
   const me = state?.players.find((p) => p.you);
@@ -153,6 +171,20 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
       if (res?.state) {
         handleLobbyStateRef.current(res.code ?? code, res.state);
       }
+    } catch (e) {
+      setErr((e as Error).message);
+      setTimeout(() => setErr(""), 2500);
+    }
+  };
+
+  const onDestroyLobby = async () => {
+    if (!window.confirm("Are you sure you want to close and delete this lobby? All players will be disconnected and this room deleted from the server.")) return;
+    const current = credsRef.current ?? creds ?? loadCreds(id);
+    if (!current) return;
+    try {
+      await api(`/api/games/${id}/action`, { action: "destroy", pid: current.pid, secret: current.secret });
+      clearCreds(id);
+      router.replace("/");
     } catch (e) {
       setErr((e as Error).message);
       setTimeout(() => setErr(""), 2500);
@@ -282,11 +314,29 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
               </button>
             )}
             {(state?.players.length ?? 0) < 2 && <p className="text-center text-xs text-white/40">Waiting for players — or add a bot to start</p>}
+            <button
+              onClick={() => void onDestroyLobby()}
+              className="mt-1 flex items-center justify-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 py-2.5 text-xs font-bold text-rose-300 transition hover:bg-rose-500/20 hover:border-rose-500/40"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Close & Delete Lobby
+            </button>
           </div>
         ) : (
-          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/60">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
-            Waiting for the host to start…
+          <div className="flex w-full flex-col gap-2">
+            <div className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/60">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+              Waiting for the host to start…
+            </div>
+            <button
+              onClick={async () => {
+                await action({ action: "leave" });
+                clearCreds(id);
+                router.replace("/");
+              }}
+              className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 py-2 text-xs font-bold text-white/50 transition hover:bg-white/10 hover:text-white/80"
+            >
+              Leave Lobby
+            </button>
           </div>
         )}
 

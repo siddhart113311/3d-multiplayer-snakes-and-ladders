@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import * as THREE from "three";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, Users } from "lucide-react";
+import { Bot, Trash2, Users } from "lucide-react";
 import { BoardDef, BoardSize, clampSize, DEFAULT_SIZE, getBoard } from "@/game/boards";
 import { GameEvent } from "@/game/engine";
 import { LocalGame, SoloConfig } from "@/game/localGame";
 import { Bridge, Director, SnakeVisual, TokenVisual } from "@/game/director";
 import { buildSnakeCurve } from "@/game/snakeCurves";
 import { sfx } from "@/game/sounds";
-import { api, loadCreds, PlayerCreds, saveCreds, saveLocalScore } from "@/lib/api";
+import { api, clearCreds, loadCreds, PlayerCreds, saveCreds, saveLocalScore } from "@/lib/api";
 import { useViewport } from "@/lib/useViewport";
 import { FireTimer, GameOverOverlay, HudPlayer, HuntTimer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
 import ChatDock, { type ChatMsg } from "@/components/ChatDock";
@@ -80,6 +80,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   // true while the Director still has queued choreography to play out
   const [animating, setAnimating] = useState(false);
   const [speakingPlayerIds, setSpeakingPlayerIds] = useState<string[]>([]);
+  const [terminatedReason, setTerminatedReason] = useState<string | null>(null);
 
   const bridgeRef = useRef<Bridge | null>(null);
   const directorRef = useRef<Director | null>(null);
@@ -236,16 +237,28 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       credsRef.current = lg.creds;
       setCreds(lg.creds);
     } else {
-      const c = loadCreds(storageKey);
+      let c = loadCreds(storageKey);
+      if (!c && typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const qPid = params.get("pid");
+        const qSecret = params.get("secret");
+        const qName = params.get("name") || "Player";
+        if (qPid && qSecret) {
+          c = { pid: qPid, secret: qSecret, name: qName };
+          saveCreds(storageKey, c);
+        }
+      }
       if (c) {
         credsRef.current = c;
         setCreds(c);
       }
     }
     void fetchState();
-    // solo ticks at 400ms; online multiplayer uses Pusher WebSockets with a snappy 2s fallback poll
-    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 2000);
-    return () => clearInterval(iv);
+    // Solo mode ticks locally; online multiplayer is 100% WebSockets driven (zero HTTP polling)
+    if (localRef.current) {
+      const iv = setInterval(() => void fetchState(), 400);
+      return () => clearInterval(iv);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
@@ -262,22 +275,31 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       }
     };
 
+    const onGameDestroyed = (data: { reason?: string }) => {
+      clearCreds(gameId);
+      setTerminatedReason(data?.reason || "The host has terminated and deleted this game.");
+    };
+
     const idChannel = `game-${gameId.toUpperCase()}`;
     const channel1 = pusher.subscribe(idChannel);
     channel1.bind("game-updated", onGameUpdated);
+    channel1.bind("game-destroyed", onGameDestroyed);
 
     let channel2: ReturnType<typeof pusher.subscribe> | null = null;
     if (code) {
       const codeChannel = `game-${code.toUpperCase()}`;
       channel2 = pusher.subscribe(codeChannel);
       channel2.bind("game-updated", onGameUpdated);
+      channel2.bind("game-destroyed", onGameDestroyed);
     }
 
     return () => {
       channel1.unbind("game-updated", onGameUpdated);
+      channel1.unbind("game-destroyed", onGameDestroyed);
       pusher.unsubscribe(idChannel);
       if (channel2) {
         channel2.unbind("game-updated", onGameUpdated);
+        channel2.unbind("game-destroyed", onGameDestroyed);
         pusher.unsubscribe(`game-${code.toUpperCase()}`);
       }
     };
@@ -314,6 +336,21 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
 
   const me = useMemo(() => pub?.players.find((p) => p.you) ?? null, [pub]);
   const current = pub ? pub.players[pub.turn] : null;
+  const isHost = Boolean(me && pub && me.id === pub.hostId);
+
+  const onDestroyGame = useCallback(async () => {
+    if (!window.confirm("Are you sure you want to terminate and delete this game? All players will be disconnected, the voice room will close, and this game will be permanently deleted from the database.")) return;
+    const c = credsRef.current;
+    if (!c || !gameId) return;
+    try {
+      await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret });
+      clearCreds(gameId);
+      router.push("/");
+    } catch (e) {
+      setErr((e as Error).message);
+      setTimeout(() => setErr(""), 2500);
+    }
+  }, [gameId, router]);
 
   const doRoll = useCallback(async () => {
     const c = credsRef.current;
@@ -717,7 +754,35 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       {/* paused */}
       <AnimatePresence>
         {paused && pub.status !== "finished" && (
-          <PauseOverlay onResume={() => setPaused(false)} onQuit={() => router.push("/")} muted={muted} onMute={() => setMuted(sfx.toggleMute())} />
+          <PauseOverlay
+            onResume={() => setPaused(false)}
+            onQuit={() => router.push("/")}
+            muted={muted}
+            onMute={() => setMuted(sfx.toggleMute())}
+            isHost={isHost}
+            onDestroy={onDestroyGame}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* terminated overlay */}
+      <AnimatePresence>
+        {terminatedReason && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
+            <motion.div initial={{ scale: 0.9, y: 16 }} animate={{ scale: 1, y: 0 }} className="flex w-full max-w-sm flex-col gap-4 rounded-3xl border border-rose-500/30 bg-slate-950 p-6 text-center shadow-2xl">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <h3 className="font-display text-xl font-black text-white">Game Terminated</h3>
+              <p className="text-xs text-white/60">{terminatedReason}</p>
+              <button
+                onClick={() => router.push("/")}
+                className="rounded-2xl bg-gradient-to-r from-emerald-400 to-cyan-400 py-3 text-sm font-black uppercase tracking-widest text-slate-950 transition hover:brightness-110"
+              >
+                Return to Menu
+              </button>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 

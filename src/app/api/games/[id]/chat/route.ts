@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
 import { addChat, GameState, normalizeState, publicState } from "@/game/engine";
+import { getCachedGame, setCachedGame } from "@/game/gameCache";
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
@@ -25,11 +26,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const text = String(body.text ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
   if (!text) return Response.json({ error: "empty message" }, { status: 400 });
 
-  const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
-  const row = rows[0];
-  if (!row) return Response.json({ error: "not found" }, { status: 404 });
+  let state: GameState;
+  let code: string;
+  const cached = getCachedGame(id);
 
-  const state = normalizeState(row.state as unknown as GameState);
+  if (cached) {
+    state = cached.state;
+    code = cached.code;
+  } else {
+    const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) return Response.json({ error: "not found" }, { status: 404 });
+    state = normalizeState(row.state as unknown as GameState);
+    code = row.code;
+    setCachedGame(id, code, state);
+  }
+
   const me = state.players.find((p) => p.id === body.pid);
   if (!me || me.secret !== body.secret) return Response.json({ error: "unauthorized" }, { status: 401 });
 
@@ -41,12 +53,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   addChat(state, { playerId: me.id, name: me.name, color: me.color, text });
   await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, id));
+  setCachedGame(id, code, state);
 
-  await triggerGameEvent([id, row.code], "game-updated", {
-    code: row.code,
+  await triggerGameEvent([id, code], "game-updated", {
+    code,
     state: publicState(state),
     serverNow: Date.now(),
   });
 
   return Response.json({ ok: true, state: publicState(state, me.id), serverNow: Date.now() });
 }
+

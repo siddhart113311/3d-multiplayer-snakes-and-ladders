@@ -3,6 +3,7 @@ import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
 import { BoardShape, BOARD_SHAPES, clampSize, DEFAULT_SIZE } from "@/game/boards";
 import { addPlayer, createState, GameMode, startGame } from "@/game/engine";
+import { setCachedGame } from "@/game/gameCache";
 import { makeCode } from "@/game/rng";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,8 @@ export async function POST(req: Request) {
       .insert(games)
       .values({ code, status: state.status, state })
       .returning({ id: games.id });
+
+    setCachedGame(row.id, code, state);
 
     return Response.json({
       gameId: row.id,

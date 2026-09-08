@@ -12,6 +12,7 @@ import {
   rematch,
   startGame,
 } from "@/game/engine";
+import { getCachedGame, removeCachedGame, setCachedGame } from "@/game/gameCache";
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
@@ -43,10 +44,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return Response.json({ error: "bad body" }, { status: 400 });
   }
 
-  const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
-  const row = rows[0];
-  if (!row) return Response.json({ error: "not found" }, { status: 404 });
-  const state = normalizeState(row.state as unknown as GameState);
+  let state: GameState;
+  let code: string;
+  const cached = getCachedGame(id);
+
+  if (cached) {
+    state = cached.state;
+    code = cached.code;
+  } else {
+    const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
+    const row = rows[0];
+    if (!row) return Response.json({ error: "not found" }, { status: 404 });
+    state = normalizeState(row.state as unknown as GameState);
+    code = row.code;
+    setCachedGame(id, code, state);
+  }
 
   const me = state.players.find((p) => p.id === body.pid);
   if (me) me.lastSeen = Date.now();
@@ -81,7 +93,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
     case "rematch": {
       if (state.status !== "finished") return Response.json({ error: "Game not finished" }, { status: 400 });
-      rematch(state, row.code);
+      rematch(state, code);
       break;
     }
     case "addBot": {
@@ -102,9 +114,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       if (me) {
         if (isHost) {
           // Host leaving (lobby or in-game) terminates and deletes the game
-          const targets = [id, row.code];
+          removeCachedGame(id);
+          const targets = [id, code];
           await triggerGameEvent(targets, "game-destroyed", {
-            code: row.code,
+            code,
             gameId: id,
             reason: "The host left the game. The game has ended.",
           }).catch(() => undefined);
@@ -113,14 +126,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             try {
               const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
               const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
-              await roomService.deleteRoom(row.code.toUpperCase()).catch(() => undefined);
+              await roomService.deleteRoom(code.toUpperCase()).catch(() => undefined);
             } catch (lkErr) {
               console.warn("[LiveKit] deleteRoom failed:", lkErr);
             }
           }
 
           await db.delete(games).where(eq(games.id, id));
-          return Response.json({ ok: true, destroyed: true, gameId: id, code: row.code });
+          return Response.json({ ok: true, destroyed: true, gameId: id, code });
         } else if (state.status === "waiting") {
           state.players = state.players.filter((p) => p.id !== me.id);
           logLinePublic(state, `${me.name} left`);
@@ -138,29 +151,32 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     case "destroy": {
       if (!isHost) return Response.json({ error: "Only the host can terminate and delete the game" }, { status: 403 });
 
-      // 1. Broadcast game-destroyed over Pusher WebSockets to all connected clients
-      const targets = [id, row.code];
+      // 1. Evict from in-memory cache
+      removeCachedGame(id);
+
+      // 2. Broadcast game-destroyed over Pusher WebSockets to all connected clients
+      const targets = [id, code];
       await triggerGameEvent(targets, "game-destroyed", {
-        code: row.code,
+        code,
         gameId: id,
         reason: "The host has terminated and deleted this game.",
       }).catch(() => undefined);
 
-      // 2. Delete LiveKit WebRTC Voice Chat room if configured
+      // 3. Delete LiveKit WebRTC Voice Chat room if configured
       if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
         try {
           const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
           const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
-          await roomService.deleteRoom(row.code.toUpperCase());
+          await roomService.deleteRoom(code.toUpperCase());
         } catch (lkErr) {
           console.warn("[LiveKit] deleteRoom failed:", lkErr);
         }
       }
 
-      // 3. Delete game completely from PostgreSQL database
+      // 4. Delete game completely from PostgreSQL database
       await db.delete(games).where(eq(games.id, id));
 
-      return Response.json({ ok: true, destroyed: true, gameId: id, code: row.code });
+      return Response.json({ ok: true, destroyed: true, gameId: id, code });
     }
   }
 
@@ -169,12 +185,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .set({ state, status: state.status, updatedAt: new Date() })
     .where(eq(games.id, id));
 
+  setCachedGame(id, code, state);
+
   const pubForBroadcast = publicState(state);
-  const targets = [id, row.code];
+  const targets = [id, code];
 
   const triggers: Promise<boolean>[] = [
     triggerGameEvent(targets, "game-updated", {
-      code: row.code,
+      code,
       state: pubForBroadcast,
       serverNow: Date.now(),
     }),
@@ -183,7 +201,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (state.status === "waiting" || body.action === "start") {
     triggers.push(
       triggerGameEvent(targets, "lobby-updated", {
-        code: row.code,
+        code,
         state: pubForBroadcast,
         serverNow: Date.now(),
       })
@@ -195,7 +213,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   return Response.json({
     ok: true,
     gameId: id,
-    code: row.code,
+    code,
     state: publicState(state, body.pid),
     serverNow: Date.now(),
     rollerSecret: undefined,

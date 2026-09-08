@@ -1,7 +1,8 @@
 import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
-import { addPlayer, GameState, logLinePublic, normalizeState } from "@/game/engine";
+import { addPlayer, GameState, logLinePublic, normalizeState, publicState } from "@/game/engine";
+import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,12 @@ export async function POST(req: Request) {
     logLinePublic(state, `${player.name} joined the lobby`);
 
     await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, row.id));
+
+    void triggerGameEvent(row.code, "lobby-updated", {
+      code: row.code,
+      state: publicState(state),
+    });
+
     return Response.json({ gameId: row.id, code: row.code, playerId: player.id, secret: player.secret, status: state.status });
   } catch (e) {
     console.error("Join lobby failed:", e);

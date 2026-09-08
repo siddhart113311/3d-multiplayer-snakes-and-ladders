@@ -7,6 +7,7 @@ import { Bot, Check, Copy, Crosshair, Crown, Flame, Home, Play, Trash2, Users } 
 import { api, loadCreds, PlayerCreds } from "@/lib/api";
 import { BoardShape, cellCount, clampSize, DEFAULT_SIZE, sizeLabel } from "@/game/boards";
 import { sfx } from "@/game/sounds";
+import { getPusherClient } from "@/lib/pusher/client";
 
 interface LobbyPlayer {
   id: string;
@@ -50,25 +51,55 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     setCreds(loadCreds(id));
   }, [id]);
 
+  const handleLobbyState = useCallback(
+    (dataCode: string, st: LobbyState) => {
+      setCode(dataCode);
+      const c = loadCreds(id);
+      const taggedPlayers = st.players.map((p) => ({
+        ...p,
+        you: p.id === c?.pid,
+      }));
+      const updatedState = { ...st, players: taggedPlayers };
+      setState(updatedState);
+      if (updatedState.status === "playing" && updatedState.players.some((p) => p.you)) {
+        router.replace(`/game/${id}`);
+      }
+    },
+    [id, router]
+  );
+
   const poll = useCallback(async () => {
     try {
       const c = loadCreds(id);
       const data = await api<{ code: string; state: LobbyState }>(`/api/games/${id}?pid=${c?.pid ?? ""}`);
-      setCode(data.code);
-      setState(data.state);
-      if (data.state.status === "playing" && data.state.players.some((p) => p.you)) {
-        router.replace(`/game/${id}`);
-      }
+      handleLobbyState(data.code, data.state);
     } catch {
       setErr("Lobby not found");
     }
-  }, [id, router]);
+  }, [id, handleLobbyState]);
 
   useEffect(() => {
     void poll();
-    const iv = setInterval(() => void poll(), 1200);
+    // Relaxed fallback poll every 8 seconds
+    const iv = setInterval(() => void poll(), 8000);
+
+    const pusher = getPusherClient();
+    if (pusher && code) {
+      const channel = pusher.subscribe(`game-${code.toUpperCase()}`);
+      channel.bind("lobby-updated", (data: { code?: string; state?: LobbyState }) => {
+        if (data?.state) {
+          handleLobbyState(data.code ?? code, data.state);
+        }
+      });
+      return () => {
+        clearInterval(iv);
+        channel.unbind("lobby-updated");
+        pusher.unsubscribe(`game-${code.toUpperCase()}`);
+      };
+    }
+
     return () => clearInterval(iv);
-  }, [poll]);
+  }, [poll, code, handleLobbyState]);
 
   const me = state?.players.find((p) => p.you);
   const isHost = me && me.id === state?.hostId;

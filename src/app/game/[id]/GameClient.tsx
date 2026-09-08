@@ -17,6 +17,7 @@ import { useViewport } from "@/lib/useViewport";
 import { FireTimer, GameOverOverlay, HudPlayer, HuntTimer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
 import ChatDock, { type ChatMsg } from "@/components/ChatDock";
 import type { ParticlesHandle } from "@/components/three/Particles";
+import { getPusherClient } from "@/lib/pusher/client";
 
 const Scene = dynamic(() => import("@/components/three/Scene"), { ssr: false });
 
@@ -142,6 +143,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       if (pubRef.current && (state.chat?.length ?? 0) < pubRef.current.chat.length) {
         state.chat = pubRef.current.chat;
       }
+      const myPid = credsRef.current?.pid;
+      if (myPid && state.players) {
+        state.players = state.players.map((p) => ({
+          ...p,
+          you: p.id === myPid,
+        }));
+      }
       setCode(data.code);
       if (!bridgeRef.current) {
         const def = getBoard(state.board, clampSize(state.size ?? DEFAULT_SIZE));
@@ -230,11 +238,33 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       }
     }
     void fetchState();
-    // solo still ticks (fire-mode timers advance locally), just far cheaper
-    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 900);
+    // solo still ticks (fire-mode timers advance locally) at 400ms; online multiplayer uses Pusher WebSockets with 8s fallback poll
+    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 8000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
+
+  // Real-time Pusher WebSockets updates for online multiplayer
+  useEffect(() => {
+    if (localRef.current || !code) return;
+
+    const pusher = getPusherClient();
+    if (!pusher) return;
+
+    const channelName = `game-${code.toUpperCase()}`;
+    const channel = pusher.subscribe(channelName);
+
+    channel.bind("game-updated", (data: FetchResp) => {
+      if (data?.state) {
+        processState(data);
+      }
+    });
+
+    return () => {
+      channel.unbind("game-updated");
+      pusher.unsubscribe(channelName);
+    };
+  }, [code, processState]);
 
   // director ticker — also publishes "is the board still animating?" so the
   // game-over screen can wait for the winning move to finish playing.

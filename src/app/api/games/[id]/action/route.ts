@@ -12,6 +12,7 @@ import {
   rematch,
   startGame,
 } from "@/game/engine";
+import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -110,6 +111,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .update(games)
     .set({ state, status: state.status, updatedAt: new Date() })
     .where(eq(games.id, id));
+
+  const pubForBroadcast = publicState(state);
+  void triggerGameEvent(row.code, "game-updated", {
+    code: row.code,
+    state: pubForBroadcast,
+    serverNow: Date.now(),
+  });
+
+  if (state.status === "waiting" || body.action === "start") {
+    void triggerGameEvent(row.code, "lobby-updated", {
+      code: row.code,
+      state: pubForBroadcast,
+      serverNow: Date.now(),
+    });
+  }
 
   return Response.json({
     ok: true,

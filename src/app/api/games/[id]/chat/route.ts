@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
 import { addChat, GameState, normalizeState, publicState } from "@/game/engine";
+import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   addChat(state, { playerId: me.id, name: me.name, color: me.color, text });
   await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, id));
+
+  void triggerGameEvent(row.code, "game-updated", {
+    code: row.code,
+    state: publicState(state),
+    serverNow: Date.now(),
+  });
 
   return Response.json({ ok: true, state: publicState(state, me.id), serverNow: Date.now() });
 }

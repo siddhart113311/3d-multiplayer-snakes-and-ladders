@@ -8,6 +8,11 @@ const databaseUrl = process.env.DATABASE_URL;
 const connectionString =
   databaseUrl ?? "postgresql://unconfigured:unconfigured@127.0.0.1:5432/unconfigured";
 
+const isLocalhost =
+  !databaseUrl ||
+  databaseUrl.includes("127.0.0.1") ||
+  databaseUrl.includes("localhost");
+
 const globalForDb = globalThis as typeof globalThis & {
   __arenaNextJsPostgresqlPool?: Pool;
 };
@@ -21,6 +26,7 @@ export const pool =
     connectionTimeoutMillis: 8_000,
     idleTimeoutMillis: 30_000,
     max: process.env.NODE_ENV === "production" ? 5 : 10,
+    ssl: isLocalhost ? undefined : { rejectUnauthorized: false },
   });
 
 if (process.env.NODE_ENV !== "production") {

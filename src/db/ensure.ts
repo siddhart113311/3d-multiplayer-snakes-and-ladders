@@ -69,10 +69,22 @@ async function bootstrap() {
 
 export function databaseError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  console.error("[Multiplayer Database Error]:", error);
+
   if (!process.env.DATABASE_URL) return "Online multiplayer is not configured: DATABASE_URL is missing.";
+
+  if (
+    (process.env.VERCEL || process.env.NODE_ENV === "production") &&
+    (process.env.DATABASE_URL.includes("127.0.0.1") || process.env.DATABASE_URL.includes("localhost"))
+  ) {
+    return "DATABASE_URL is set to localhost/127.0.0.1 on Vercel. Vercel cannot reach your local machine. Please configure a cloud PostgreSQL database (e.g. Neon, Supabase).";
+  }
+
   if (/password authentication failed/i.test(message)) return "The multiplayer database rejected its credentials. Check DATABASE_URL.";
   if (/ENOTFOUND|getaddrinfo/i.test(message)) return "The multiplayer database host could not be found. Check DATABASE_URL.";
   if (/ECONNREFUSED|connect ECONN/i.test(message)) return "The multiplayer database is unreachable. Check DATABASE_URL and its network access rules.";
+  if (/ETIMEDOUT|timeout/i.test(message)) return "The multiplayer database connection timed out. Check your database network rules or connection string.";
+  if (/SSL|certificate|no encryption/i.test(message)) return "The multiplayer database rejected the connection due to SSL. Check your database SSL settings.";
   if (/does not exist/i.test(message) && /database/i.test(message)) return "The database named in DATABASE_URL does not exist.";
   return "Online multiplayer is temporarily unavailable. Please retry in a moment.";
 }

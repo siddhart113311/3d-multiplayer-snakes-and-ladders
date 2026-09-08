@@ -242,6 +242,30 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     }
   };
 
+  const onLeaveLobby = async () => {
+    if (isHost) {
+      await onDestroyLobby();
+    } else {
+      await action({ action: "leave" });
+      clearCreds(id);
+      router.replace("/");
+    }
+  };
+
+  useEffect(() => {
+    if (!id) return;
+    const handleBeforeUnload = () => {
+      const c = credsRef.current ?? loadCreds(id);
+      if (!c) return;
+      const act = isHost ? "destroy" : "leave";
+      const payload = JSON.stringify({ action: act, pid: c.pid, secret: c.secret });
+      const blob = new Blob([payload], { type: "application/json" });
+      navigator.sendBeacon?.(`/api/games/${id}/action`, blob);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [id, isHost]);
+
   const copy = () => {
     void navigator.clipboard?.writeText(code);
     setCopied(true);
@@ -274,7 +298,7 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
                 compact
               />
             )}
-            <button onClick={() => router.push("/")} className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/70 hover:bg-white/10">
+            <button onClick={() => void onLeaveLobby()} className="rounded-xl border border-white/10 bg-white/5 p-2 text-white/70 hover:bg-white/10" title={isHost ? "Close Lobby" : "Leave Lobby"}>
               <Home className="h-4 w-4" />
             </button>
           </div>

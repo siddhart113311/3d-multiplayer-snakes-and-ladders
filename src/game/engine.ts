@@ -20,6 +20,8 @@ export interface Player {
   gulped: number;
   /** 0 = perfectly fair dice. >0 = chance to take the better of two rolls (bot difficulty). */
   luck?: number;
+  /** Timestamp (ms) when this player last communicated with the server. */
+  lastSeen?: number;
 }
 
 export interface Snake {
@@ -88,6 +90,7 @@ export function normalizeState(state: GameState): GameState {
     p.finishOrder ??= 0;
     p.ladders ??= 0;
     p.gulped ??= 0;
+    p.lastSeen ??= Date.now();
   }
   if (!state.hostId && state.players[0]) {
     state.hostId = state.players[0].id;
@@ -319,6 +322,7 @@ export function addPlayer(state: GameState, name: string, isBot: boolean, luck =
     ladders: 0,
     gulped: 0,
     luck: isBot ? luck : 0,
+    lastSeen: Date.now(),
   };
   state.players.push(player);
   if (!state.hostId) state.hostId = player.id;
@@ -618,6 +622,54 @@ export function advanceWorld(state: GameState, now: number) {
   advanceHunt(state, now);
 }
 
+/** Timeout after which an inactive player is considered disconnected/unresponsive (18 seconds). */
+export const UNRESPONSIVE_TIMEOUT_MS = 18000;
+
+export interface LivenessResult {
+  hostUnresponsive: boolean;
+  changed: boolean;
+  becameCpu: string[];
+}
+
+/**
+ * Check if players have disconnected or become unresponsive.
+ * - If host has been silent >18s: caller should terminate the game.
+ * - If any client has been silent >18s during active play: convert to CPU bot so game keeps moving.
+ */
+export function checkPlayerLiveness(state: GameState, now: number): LivenessResult {
+  let changed = false;
+  const becameCpu: string[] = [];
+  const host = state.players.find((p) => p.id === state.hostId);
+  const hostUnresponsive = Boolean(
+    host &&
+      !host.isBot &&
+      host.lastSeen &&
+      now - host.lastSeen > UNRESPONSIVE_TIMEOUT_MS
+  );
+
+  if (state.status === "playing") {
+    for (const p of state.players) {
+      if (
+        p.id !== state.hostId &&
+        !p.isBot &&
+        !p.finished &&
+        p.lastSeen &&
+        now - p.lastSeen > UNRESPONSIVE_TIMEOUT_MS
+      ) {
+        p.isBot = true;
+        if (!p.name.includes("(CPU)")) {
+          p.name = `${p.name} (CPU)`;
+        }
+        logLine(state, `${p.name} disconnected and was replaced by CPU.`);
+        becameCpu.push(p.name);
+        changed = true;
+      }
+    }
+  }
+
+  return { hostUnresponsive, changed, becameCpu };
+}
+
 export function advanceFire(state: GameState, now: number) {
   if (state.mode !== "fire" || state.status !== "playing" || !state.nextSnakeAt) return;
   if (now < state.nextSnakeAt) return;
@@ -726,6 +778,7 @@ export function publicState(state: GameState, forPlayerId?: string) {
       finishOrder: p.finishOrder,
       ladders: p.ladders,
       gulped: p.gulped,
+      lastSeen: p.lastSeen,
       you: p.id === forPlayerId,
     })),
   };

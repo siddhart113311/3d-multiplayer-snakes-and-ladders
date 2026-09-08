@@ -49,6 +49,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const state = normalizeState(row.state as unknown as GameState);
 
   const me = state.players.find((p) => p.id === body.pid);
+  if (me) me.lastSeen = Date.now();
   const isHost = me && me.id === state.hostId;
   advanceWorld(state, Date.now());
 
@@ -98,13 +99,39 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       break;
     }
     case "leave": {
-      if (state.status === "waiting" && me) {
-        state.players = state.players.filter((p) => p.id !== me.id);
-        if (state.hostId === me.id && state.players.length) {
-          const nextHuman = state.players.find((p) => !p.isBot);
-          state.hostId = (nextHuman ?? state.players[0]).id;
+      if (me) {
+        if (isHost) {
+          // Host leaving (lobby or in-game) terminates and deletes the game
+          const targets = [id, row.code];
+          await triggerGameEvent(targets, "game-destroyed", {
+            code: row.code,
+            gameId: id,
+            reason: "The host left the game. The game has ended.",
+          }).catch(() => undefined);
+
+          if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
+            try {
+              const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
+              const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
+              await roomService.deleteRoom(row.code.toUpperCase()).catch(() => undefined);
+            } catch (lkErr) {
+              console.warn("[LiveKit] deleteRoom failed:", lkErr);
+            }
+          }
+
+          await db.delete(games).where(eq(games.id, id));
+          return Response.json({ ok: true, destroyed: true, gameId: id, code: row.code });
+        } else if (state.status === "waiting") {
+          state.players = state.players.filter((p) => p.id !== me.id);
+          logLinePublic(state, `${me.name} left`);
+        } else if (state.status === "playing") {
+          // Guest leaving active game becomes CPU
+          me.isBot = true;
+          if (!me.name.includes("(CPU)")) {
+            me.name = `${me.name} (CPU)`;
+          }
+          logLinePublic(state, `${me.name} left. A CPU has taken over.`);
         }
-        logLinePublic(state, `${me.name} left`);
       }
       break;
     }

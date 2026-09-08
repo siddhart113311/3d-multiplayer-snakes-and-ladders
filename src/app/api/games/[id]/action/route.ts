@@ -145,19 +145,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const pubForBroadcast = publicState(state);
   const targets = [id, row.code];
 
-  void triggerGameEvent(targets, "game-updated", {
-    code: row.code,
-    state: pubForBroadcast,
-    serverNow: Date.now(),
-  });
-
-  if (state.status === "waiting" || body.action === "start") {
-    void triggerGameEvent(targets, "lobby-updated", {
+  const triggers: Promise<boolean>[] = [
+    triggerGameEvent(targets, "game-updated", {
       code: row.code,
       state: pubForBroadcast,
       serverNow: Date.now(),
-    });
+    }),
+  ];
+
+  if (state.status === "waiting" || body.action === "start") {
+    triggers.push(
+      triggerGameEvent(targets, "lobby-updated", {
+        code: row.code,
+        state: pubForBroadcast,
+        serverNow: Date.now(),
+      })
+    );
   }
+
+  await Promise.allSettled(triggers);
 
   return Response.json({
     ok: true,

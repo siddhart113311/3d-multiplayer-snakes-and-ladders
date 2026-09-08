@@ -50,7 +50,10 @@ export async function triggerGameEvent(
       new Set(
         rawTargets
           .filter(Boolean)
-          .map((t) => (t.startsWith("game-") ? t : `game-${t.toUpperCase()}`))
+          .flatMap((t) => {
+            const raw = t.startsWith("game-") ? t.slice(5) : t;
+            return [`game-${raw.toUpperCase()}`, `game-${raw.toLowerCase()}`];
+          })
       )
     );
     if (channels.length === 0) return false;

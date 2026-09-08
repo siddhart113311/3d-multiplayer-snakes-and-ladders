@@ -52,8 +52,8 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    let c = loadCreds(id);
-    if (!c && typeof window !== "undefined") {
+    let c: PlayerCreds | null = null;
+    if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const qPid = params.get("pid");
       const qSecret = params.get("secret");
@@ -62,6 +62,9 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
         c = { pid: qPid, secret: qSecret, name: qName };
         saveCreds(id, c);
       }
+    }
+    if (!c) {
+      c = loadCreds(id);
     }
     if (c) {
       credsRef.current = c;
@@ -83,8 +86,9 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
       }));
       const updatedState = { ...st, players: taggedPlayers };
       setState(updatedState);
-      if (updatedState.status === "playing" && updatedState.players.some((p) => p.you)) {
-        router.replace(`/game/${id}`);
+      if (updatedState.status === "playing") {
+        const query = c ? `?pid=${c.pid}&secret=${c.secret}&name=${encodeURIComponent(c.name)}` : "";
+        router.replace(`/game/${id}${query}`);
       }
     },
     [id, router]
@@ -101,57 +105,104 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
       const data = await api<{ code: string; state: LobbyState }>(`/api/games/${id}?pid=${c?.pid ?? ""}`);
       handleLobbyStateRef.current(data.code, data.state);
     } catch {
-      setErr("Lobby not found");
+      setErr("This lobby has ended or no longer exists.");
+      clearCreds(id);
+      setTimeout(() => {
+        router.replace("/");
+      }, 1500);
     }
-  }, [id]);
+  }, [id, router]);
 
+  // Primary: Sync heartbeat and game-ID channel subscriptions
   useEffect(() => {
-    // Fetch initial lobby state once on mount; all updates are pure WebSockets
     void poll();
 
+    const iv = setInterval(() => {
+      void poll();
+    }, 1500);
+
     const pusher = getPusherClient();
-    if (pusher && id) {
-      const channelId = pusher.subscribe(`game-${id.toUpperCase()}`);
-      const onUpdate = (data: { code?: string; state?: LobbyState }) => {
-        if (data?.state) {
-          handleLobbyStateRef.current(data.code ?? codeRef.current, data.state);
-        }
-      };
-
-      const onDestroyed = (data: { reason?: string }) => {
-        clearCreds(id);
-        setErr(data?.reason || "This lobby has been closed by the host.");
-        setTimeout(() => {
-          router.replace("/");
-        }, 1500);
-      };
-
-      channelId.bind("lobby-updated", onUpdate);
-      channelId.bind("game-updated", onUpdate);
-      channelId.bind("game-destroyed", onDestroyed);
-
-      let channelCode: ReturnType<typeof pusher.subscribe> | null = null;
-      if (code) {
-        channelCode = pusher.subscribe(`game-${code.toUpperCase()}`);
-        channelCode.bind("lobby-updated", onUpdate);
-        channelCode.bind("game-updated", onUpdate);
-        channelCode.bind("game-destroyed", onDestroyed);
-      }
-
-      return () => {
-        channelId.unbind("lobby-updated", onUpdate);
-        channelId.unbind("game-updated", onUpdate);
-        channelId.unbind("game-destroyed", onDestroyed);
-        pusher.unsubscribe(`game-${id.toUpperCase()}`);
-        if (channelCode) {
-          channelCode.unbind("lobby-updated", onUpdate);
-          channelCode.unbind("game-updated", onUpdate);
-          channelCode.unbind("game-destroyed", onDestroyed);
-          pusher.unsubscribe(`game-${code.toUpperCase()}`);
-        }
-      };
+    if (!pusher || !id) {
+      return () => clearInterval(iv);
     }
-  }, [poll, id, code, router]);
+
+    const onUpdate = (data: { code?: string; state?: LobbyState }) => {
+      if (data?.state) {
+        handleLobbyStateRef.current(data.code ?? codeRef.current, data.state);
+      }
+    };
+
+    const onDestroyed = (data: { reason?: string }) => {
+      clearCreds(id);
+      setErr(data?.reason || "This lobby has been closed by the host.");
+      setTimeout(() => {
+        router.replace("/");
+      }, 1500);
+    };
+
+    const idUpper = `game-${id.toUpperCase()}`;
+    const idLower = `game-${id.toLowerCase()}`;
+    const chUpper = pusher.subscribe(idUpper);
+    const chLower = idUpper !== idLower ? pusher.subscribe(idLower) : null;
+
+    chUpper.bind("lobby-updated", onUpdate);
+    chUpper.bind("game-updated", onUpdate);
+    chUpper.bind("game-destroyed", onDestroyed);
+
+    if (chLower) {
+      chLower.bind("lobby-updated", onUpdate);
+      chLower.bind("game-updated", onUpdate);
+      chLower.bind("game-destroyed", onDestroyed);
+    }
+
+    return () => {
+      clearInterval(iv);
+      chUpper.unbind("lobby-updated", onUpdate);
+      chUpper.unbind("game-updated", onUpdate);
+      chUpper.unbind("game-destroyed", onDestroyed);
+      pusher.unsubscribe(idUpper);
+      if (chLower) {
+        chLower.unbind("lobby-updated", onUpdate);
+        chLower.unbind("game-updated", onUpdate);
+        chLower.unbind("game-destroyed", onDestroyed);
+        pusher.unsubscribe(idLower);
+      }
+    };
+  }, [id, poll, router]);
+
+  // Secondary: Room code channel subscription (when code is available)
+  useEffect(() => {
+    if (!code) return;
+    const pusher = getPusherClient();
+    if (!pusher) return;
+
+    const onUpdate = (data: { code?: string; state?: LobbyState }) => {
+      if (data?.state) {
+        handleLobbyStateRef.current(data.code ?? codeRef.current, data.state);
+      }
+    };
+
+    const onDestroyed = (data: { reason?: string }) => {
+      clearCreds(id);
+      setErr(data?.reason || "This lobby has been closed by the host.");
+      setTimeout(() => {
+        router.replace("/");
+      }, 1500);
+    };
+
+    const codeChan = `game-${code.toUpperCase()}`;
+    const ch = pusher.subscribe(codeChan);
+    ch.bind("lobby-updated", onUpdate);
+    ch.bind("game-updated", onUpdate);
+    ch.bind("game-destroyed", onDestroyed);
+
+    return () => {
+      ch.unbind("lobby-updated", onUpdate);
+      ch.unbind("game-updated", onUpdate);
+      ch.unbind("game-destroyed", onDestroyed);
+      pusher.unsubscribe(codeChan);
+    };
+  }, [code, id, router]);
 
   const currentCreds = credsRef.current ?? creds;
   const me = state?.players.find((p) => p.you);

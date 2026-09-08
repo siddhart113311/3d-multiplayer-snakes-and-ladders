@@ -99,7 +99,8 @@ export default function HomePage() {
       if (kind === "join") {
         const data = await api<{ gameId: string; playerId: string; secret: string }>("/api/games/join", { code: code.trim().toUpperCase(), name: playerName });
         saveCreds(data.gameId, { pid: data.playerId, secret: data.secret, name: playerName });
-        router.push(`/lobby/${data.gameId}`);
+        const q = `?pid=${data.playerId}&secret=${data.secret}&name=${encodeURIComponent(playerName)}`;
+        router.push(`/lobby/${data.gameId}${q}`);
       } else {
         const data = await api<{ gameId: string; playerId: string; secret: string; status: string }>("/api/games", {
           name: playerName,
@@ -110,7 +111,8 @@ export default function HomePage() {
           bots: 3,
         });
         saveCreds(data.gameId, { pid: data.playerId, secret: data.secret, name: playerName });
-        router.push(kind === "quick" ? `/game/${data.gameId}` : `/lobby/${data.gameId}`);
+        const q = `?pid=${data.playerId}&secret=${data.secret}&name=${encodeURIComponent(playerName)}`;
+        router.push(kind === "quick" ? `/game/${data.gameId}${q}` : `/lobby/${data.gameId}${q}`);
       }
     } catch (e) {
       setErr((e as Error).message);

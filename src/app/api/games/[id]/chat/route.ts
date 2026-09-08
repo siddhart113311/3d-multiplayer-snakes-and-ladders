@@ -42,7 +42,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   addChat(state, { playerId: me.id, name: me.name, color: me.color, text });
   await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, id));
 
-  void triggerGameEvent([id, row.code], "game-updated", {
+  await triggerGameEvent([id, row.code], "game-updated", {
     code: row.code,
     state: publicState(state),
     serverNow: Date.now(),

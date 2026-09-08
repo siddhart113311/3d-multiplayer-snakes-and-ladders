@@ -29,10 +29,19 @@ export async function POST(req: Request) {
 
     await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, row.id));
 
-    void triggerGameEvent([row.id, row.code], "lobby-updated", {
-      code: row.code,
-      state: publicState(state),
-    });
+    const pub = publicState(state);
+    await Promise.allSettled([
+      triggerGameEvent([row.id, row.code], "lobby-updated", {
+        code: row.code,
+        state: pub,
+        serverNow: Date.now(),
+      }),
+      triggerGameEvent([row.id, row.code], "game-updated", {
+        code: row.code,
+        state: pub,
+        serverNow: Date.now(),
+      }),
+    ]);
 
     return Response.json({ gameId: row.id, code: row.code, playerId: player.id, secret: player.secret, status: state.status });
   } catch (e) {

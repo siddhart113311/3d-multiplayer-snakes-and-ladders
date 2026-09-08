@@ -222,9 +222,15 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       const pid = credsRef.current?.pid ?? "";
       processStateRef.current(await request("get", pid, credsRef.current?.secret ?? ""));
     } catch (e) {
-      console.warn(e);
+      const msg = (e as Error).message || "";
+      if (msg.includes("not found") && !localRef.current) {
+        clearCreds(storageKey);
+        setTerminatedReason("This game has been terminated or no longer exists.");
+      } else {
+        console.warn(e);
+      }
     }
-  }, [request]);
+  }, [request, storageKey]);
 
   // init
   useEffect(() => {
@@ -237,8 +243,8 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       credsRef.current = lg.creds;
       setCreds(lg.creds);
     } else {
-      let c = loadCreds(storageKey);
-      if (!c && typeof window !== "undefined") {
+      let c: PlayerCreds | null = null;
+      if (typeof window !== "undefined") {
         const params = new URLSearchParams(window.location.search);
         const qPid = params.get("pid");
         const qSecret = params.get("secret");
@@ -248,21 +254,22 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
           saveCreds(storageKey, c);
         }
       }
+      if (!c) {
+        c = loadCreds(storageKey);
+      }
       if (c) {
         credsRef.current = c;
         setCreds(c);
       }
     }
     void fetchState();
-    // Solo mode ticks locally; online multiplayer is 100% WebSockets driven (zero HTTP polling)
-    if (localRef.current) {
-      const iv = setInterval(() => void fetchState(), 400);
-      return () => clearInterval(iv);
-    }
+    // Solo mode ticks locally (400ms); online multiplayer has a 1500ms sync heartbeat alongside WebSockets
+    const iv = setInterval(() => void fetchState(), localRef.current ? 400 : 1500);
+    return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
-  // Real-time Pusher WebSockets updates for online multiplayer
+  // Real-time Pusher WebSockets updates for online multiplayer (gameId channel)
   useEffect(() => {
     if (localRef.current || !gameId) return;
 
@@ -280,30 +287,60 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       setTerminatedReason(data?.reason || "The host has terminated and deleted this game.");
     };
 
-    const idChannel = `game-${gameId.toUpperCase()}`;
-    const channel1 = pusher.subscribe(idChannel);
-    channel1.bind("game-updated", onGameUpdated);
-    channel1.bind("game-destroyed", onGameDestroyed);
+    const idUpper = `game-${gameId.toUpperCase()}`;
+    const idLower = `game-${gameId.toLowerCase()}`;
+    const chUpper = pusher.subscribe(idUpper);
+    const chLower = idUpper !== idLower ? pusher.subscribe(idLower) : null;
 
-    let channel2: ReturnType<typeof pusher.subscribe> | null = null;
-    if (code) {
-      const codeChannel = `game-${code.toUpperCase()}`;
-      channel2 = pusher.subscribe(codeChannel);
-      channel2.bind("game-updated", onGameUpdated);
-      channel2.bind("game-destroyed", onGameDestroyed);
+    chUpper.bind("game-updated", onGameUpdated);
+    chUpper.bind("game-destroyed", onGameDestroyed);
+
+    if (chLower) {
+      chLower.bind("game-updated", onGameUpdated);
+      chLower.bind("game-destroyed", onGameDestroyed);
     }
 
     return () => {
-      channel1.unbind("game-updated", onGameUpdated);
-      channel1.unbind("game-destroyed", onGameDestroyed);
-      pusher.unsubscribe(idChannel);
-      if (channel2) {
-        channel2.unbind("game-updated", onGameUpdated);
-        channel2.unbind("game-destroyed", onGameDestroyed);
-        pusher.unsubscribe(`game-${code.toUpperCase()}`);
+      chUpper.unbind("game-updated", onGameUpdated);
+      chUpper.unbind("game-destroyed", onGameDestroyed);
+      pusher.unsubscribe(idUpper);
+      if (chLower) {
+        chLower.unbind("game-updated", onGameUpdated);
+        chLower.unbind("game-destroyed", onGameDestroyed);
+        pusher.unsubscribe(idLower);
       }
     };
-  }, [gameId, code]);
+  }, [gameId]);
+
+  // Secondary: Pusher channel for room code (if known)
+  useEffect(() => {
+    if (localRef.current || !code || !gameId) return;
+
+    const pusher = getPusherClient();
+    if (!pusher) return;
+
+    const onGameUpdated = (data: FetchResp) => {
+      if (data?.state) {
+        processStateRef.current(data);
+      }
+    };
+
+    const onGameDestroyed = (data: { reason?: string }) => {
+      clearCreds(gameId);
+      setTerminatedReason(data?.reason || "The host has terminated and deleted this game.");
+    };
+
+    const codeChan = `game-${code.toUpperCase()}`;
+    const ch = pusher.subscribe(codeChan);
+    ch.bind("game-updated", onGameUpdated);
+    ch.bind("game-destroyed", onGameDestroyed);
+
+    return () => {
+      ch.unbind("game-updated", onGameUpdated);
+      ch.unbind("game-destroyed", onGameDestroyed);
+      pusher.unsubscribe(codeChan);
+    };
+  }, [code, gameId]);
 
   // director ticker — also publishes "is the board still animating?" so the
   // game-over screen can wait for the winning move to finish playing.

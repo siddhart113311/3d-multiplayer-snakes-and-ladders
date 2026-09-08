@@ -644,7 +644,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const charging = Boolean(
     pub?.status === "playing" &&
       ((pub.mode === "fire" && pub.nextSnakeAt - now < 4500 && pub.nextSnakeAt - now > 0) ||
-        (pub.mode === "hunt" && pub.nextCreepAt - now < 1200 && pub.nextCreepAt - now > 0))
+        (pub.mode === "hunt" && pub.nextCreepAt - now < 1500 && pub.nextCreepAt - now > 0))
   );
 
   if (!pub) {

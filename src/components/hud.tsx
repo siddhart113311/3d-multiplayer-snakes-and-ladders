@@ -176,7 +176,7 @@ export function HuntTimer({
 }) {
   const remain = Math.max(0, nextCreepAt - Date.now());
   const frac = interval > 0 ? remain / interval : 0;
-  const imminent = remain < 900;
+  const imminent = remain < 1500;
   return (
     <div
       className={`flex items-center backdrop-blur-md ${compact ? "gap-1.5 rounded-xl px-2 py-1" : "gap-2 rounded-2xl px-3 py-2"} border ${

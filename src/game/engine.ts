@@ -81,7 +81,7 @@ export function normalizeState(state: GameState): GameState {
   state.fireCursor ??= 0;
   state.fireIntervalMs ??= FIRE_INTERVAL;
   state.nextSnakeAt ??= 0;
-  state.huntIntervalMs ??= HUNT_INTERVAL;
+  state.huntIntervalMs = !state.huntIntervalMs || state.huntIntervalMs === 2600 ? HUNT_INTERVAL : state.huntIntervalMs;
   state.nextCreepAt ??= 0;
   state.lastActionAt ??= 0;
   for (const p of state.players) {
@@ -176,8 +176,8 @@ export interface GameState {
 export const PLAYER_COLORS = ["#ff4d5e", "#38bdf8", "#fbbf24", "#a78bfa"];
 export const MAX_PLAYERS = 4;
 export const FIRE_INTERVAL = 18000;
-/** Hunt mode: how often the stalking pack advances, and how many snakes hunt. */
-export const HUNT_INTERVAL = 2600;
+/** Hunt mode: how often the stalking pack advances, and how many snakes hunt. (8s per step) */
+export const HUNT_INTERVAL = 8000;
 export const HUNT_SNAKES = 5;
 const BOT_NAMES = ["Viper", "Kaa", "Nagini", "Scales", "Basilisk", "Slyther"];
 

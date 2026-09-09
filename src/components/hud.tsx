@@ -275,6 +275,7 @@ export const RollDock = React.memo(function RollDock({
   reason,
   onRoll,
   compact = false,
+  lastRolledText,
 }: {
   dice: number;
   rolling: boolean;
@@ -282,6 +283,7 @@ export const RollDock = React.memo(function RollDock({
   reason: string;
   onRoll: () => void;
   compact?: boolean;
+  lastRolledText?: string | null;
 }) {
   return (
     <div
@@ -300,14 +302,20 @@ export const RollDock = React.memo(function RollDock({
             compact ? "min-h-[46px] px-7 text-base" : "px-6 py-2.5 text-sm"
           } ${
             canRoll
-              ? "bg-gradient-to-r from-emerald-400 to-cyan-400 text-slate-950 shadow-[0_0_28px_rgba(52,211,153,0.45)] hover:shadow-[0_0_40px_rgba(52,211,153,0.7)]"
+              ? "bg-gradient-to-r from-emerald-400 to-cyan-400 text-slate-950 shadow-[0_0_28px_rgba(52,211,153,0.45)] hover:shadow-[0_0_40px_rgba(52,211,153,0.7)] cursor-pointer"
               : "cursor-not-allowed bg-white/10 text-white/40"
           }`}
         >
-          Roll
+          {rolling ? "Rolling…" : "Roll"}
         </motion.button>
-        <span className={`truncate text-[10px] text-white/50 ${compact ? "max-w-[120px]" : "max-w-[150px]"}`}>
-          {rolling ? "Rolling the fates…" : reason}
+        <span className={`truncate text-[10px] ${compact ? "max-w-[120px]" : "max-w-[160px]"}`}>
+          {rolling ? (
+            <span className="font-semibold text-amber-300 animate-pulse">Rolling the fates…</span>
+          ) : lastRolledText ? (
+            <span className="font-extrabold text-emerald-300 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]">{lastRolledText}</span>
+          ) : (
+            <span className="text-white/50">{reason}</span>
+          )}
         </span>
       </div>
     </div>

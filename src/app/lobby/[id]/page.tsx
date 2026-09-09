@@ -114,18 +114,30 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     }
   }, [id, router, err]);
 
-  // Primary: Sync heartbeat and game-ID channel subscriptions
+  // Primary: Sync on mount/focus and game-ID channel subscriptions (zero continuous polling)
   useEffect(() => {
     void poll();
 
-    const iv = setInterval(() => {
-      if (err) return;
-      void poll();
-    }, 5000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !err) {
+        void poll();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     const pusher = getPusherClient();
+    let fallbackIv: NodeJS.Timeout | undefined;
+
     if (!pusher || !id) {
-      return () => clearInterval(iv);
+      // Fallback polling ONLY if Pusher is not configured at all in .env
+      fallbackIv = setInterval(() => {
+        if (err) return;
+        void poll();
+      }, 5000);
+      return () => {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        if (fallbackIv) clearInterval(fallbackIv);
+      };
     }
 
     const onUpdate = (data: { code?: string; state?: LobbyState }) => {
@@ -141,6 +153,11 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
         router.replace("/");
       }, 1500);
     };
+
+    const onConnected = () => {
+      if (!err) void poll();
+    };
+    pusher.connection.bind("connected", onConnected);
 
     const idUpper = `game-${id.toUpperCase()}`;
     const idLower = `game-${id.toLowerCase()}`;
@@ -158,7 +175,9 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
     }
 
     return () => {
-      clearInterval(iv);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (fallbackIv) clearInterval(fallbackIv);
+      pusher.connection.unbind("connected", onConnected);
       chUpper.unbind("lobby-updated", onUpdate);
       chUpper.unbind("game-updated", onUpdate);
       chUpper.unbind("game-destroyed", onDestroyed);
@@ -170,7 +189,7 @@ export default function LobbyPage({ params }: { params: Promise<{ id: string }> 
         pusher.unsubscribe(idLower);
       }
     };
-  }, [id, poll, router]);
+  }, [id, poll, router, err]);
 
   // Secondary: Room code channel subscription (when code is available)
   useEffect(() => {

@@ -33,6 +33,8 @@ export interface Bridge {
   burst: ((pos: THREE.Vector3, color: string, count?: number, speed?: number) => void) | null;
   onWin: ((playerId: string) => void) | null;
   onIdle: (() => void) | null;
+  onDiceRoll?: ((dice: number, playerId: string) => void) | null;
+  onDiceLand?: ((dice: number, playerId: string) => void) | null;
 }
 
 type Tween = {
@@ -147,9 +149,16 @@ export class Director {
         case "roll":
           this.queue.push({
             run: async () => {
+              this.bridge.onDiceRoll?.(ev.dice, ev.playerId);
               sfx.diceRoll();
-              await this.tween(0.65, () => {});
+              // Distinct tumble animation so the roll is clearly seen (0.75s)
+              await this.tween(0.75, () => {});
+              // Land SFX and face reveal
               sfx.diceLand(ev.dice);
+              this.bridge.onDiceLand?.(ev.dice, ev.playerId);
+              // Readability pause (0.55s) allows the dice to settle on its face
+              // and the player to clearly read the number BEFORE the token starts hopping
+              await this.tween(0.55, () => {});
             },
           });
           break;

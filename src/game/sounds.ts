@@ -92,8 +92,8 @@ class SoundFX {
 
   diceRoll() {
     const t = this.now();
-    for (let i = 0; i < 7; i++) {
-      const dt = i * 0.06 + Math.random() * 0.01;
+    for (let i = 0; i < 11; i++) {
+      const dt = i * 0.055 + Math.random() * 0.01;
       this.noise(t + dt, 0.03, 0.22, 2600 + Math.random() * 1800, 2);
       this.osc("square", 180 + Math.random() * 120, t + dt, 0.03, 0.06);
     }

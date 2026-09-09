@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 const PIPS: Record<number, number[]> = {
   1: [4],
@@ -11,11 +11,18 @@ const PIPS: Record<number, number[]> = {
   6: [0, 2, 3, 5, 6, 8],
 };
 
+// Rotations to bring each target face to the front (+Z camera view):
+// Face 1 (front): identity
+// Face 2 (right, rotateY 90): cancel with rotateY(-90deg)
+// Face 3 (left, rotateY -90): cancel with rotateY(90deg)
+// Face 4 (top, rotateX 90): cancel with rotateX(-90deg)
+// Face 5 (bottom, rotateX -90): cancel with rotateX(90deg)
+// Face 6 (back, rotateX 180): cancel with rotateX(180deg)
 const ROT: Record<number, string> = {
   1: "rotateX(0deg) rotateY(0deg)",
-  2: "rotateX(-90deg)",
-  3: "rotateY(-90deg)",
-  4: "rotateY(90deg)",
+  2: "rotateY(-90deg)",
+  3: "rotateY(90deg)",
+  4: "rotateX(-90deg)",
   5: "rotateX(90deg)",
   6: "rotateX(180deg)",
 };
@@ -35,16 +42,15 @@ function Face({ n, transform }: { n: number; transform: string }) {
   );
 }
 
-const FACE_T = [
-  "translateZ(26px)",
-  "rotateY(90deg) translateZ(26px)",
-  "rotateY(-90deg) translateZ(26px)",
-  "rotateX(90deg) translateZ(26px)",
-  "rotateX(-90deg) translateZ(26px)",
-  "rotateX(180deg) translateZ(26px)",
-];
-
-export default memo(function DiceCube({ value, rolling, size = 52 }: { value: number; rolling: boolean; size?: number }) {
+export default memo(function DiceCube({
+  value,
+  rolling,
+  size = 52,
+}: {
+  value: number;
+  rolling: boolean;
+  size?: number;
+}) {
   const [shown, setShown] = useState(value || 1);
   const [settled, setSettled] = useState(true);
 
@@ -55,22 +61,38 @@ export default memo(function DiceCube({ value, rolling, size = 52 }: { value: nu
     }
     if (value > 0) {
       setShown(value);
-      setSettled(true);
+      // Ensure the rotation applies cleanly on settle
+      const raf = requestAnimationFrame(() => setSettled(true));
+      return () => cancelAnimationFrame(raf);
     }
   }, [rolling, value]);
 
   const s = size;
+  const half = Math.round(s / 2);
+
+  const faceTransforms = useMemo(
+    () => [
+      `translateZ(${half}px)`,
+      `rotateY(90deg) translateZ(${half}px)`,
+      `rotateY(-90deg) translateZ(${half}px)`,
+      `rotateX(90deg) translateZ(${half}px)`,
+      `rotateX(-90deg) translateZ(${half}px)`,
+      `rotateX(180deg) translateZ(${half}px)`,
+    ],
+    [half]
+  );
+
   return (
     <div style={{ width: s, height: s, perspective: 240 }} className="select-none">
       <div
         className={rolling ? "dice-tumble relative h-full w-full" : "relative h-full w-full"}
         style={{
           transformStyle: "preserve-3d",
-          transform: settled ? ROT[shown] : undefined,
-          transition: settled ? "transform 0.5s cubic-bezier(0.2, 1.4, 0.4, 1)" : undefined,
+          transform: settled && !rolling ? ROT[shown] : undefined,
+          transition: settled && !rolling ? "transform 0.36s cubic-bezier(0.18, 1.25, 0.4, 1)" : undefined,
         }}
       >
-        {FACE_T.map((t, i) => (
+        {faceTransforms.map((t, i) => (
           <Face key={i} n={i + 1} transform={t} />
         ))}
       </div>

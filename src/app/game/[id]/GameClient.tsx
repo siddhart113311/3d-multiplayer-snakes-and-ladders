@@ -68,6 +68,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const [code, setCode] = useState("");
   const [creds, setCreds] = useState<PlayerCreds | null>(null);
   const [rolling, setRolling] = useState(false);
+  const [lastRolled, setLastRolled] = useState<{ dice: number; pid: string } | null>(null);
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
   const [err, setErr] = useState("");
@@ -173,6 +174,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
               confetti({ particleCount: 60, angle: 120, spread: 60, origin: { x: 1, y: 0.8 } });
             });
           },
+          onDiceRoll: () => {
+            setRolling(true);
+          },
+          onDiceLand: (dice, pid) => {
+            setRolling(false);
+            setLastRolled({ dice, pid });
+          },
           onIdle: () => {
             const st = pubRef.current;
             if (st) {
@@ -186,6 +194,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
               syncSnakes(st);
             }
             setBusy(false);
+            setLastRolled(null);
           },
         };
         bridgeRef.current = bridge;
@@ -266,12 +275,38 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       }
     }
     void fetchState();
-    // Solo mode ticks locally (400ms); online multiplayer uses Pusher WebSockets with a relaxed 8s safety heartbeat
-    const iv = setInterval(() => {
-      if (terminatedReason || pubRef.current?.status === "finished") return;
-      void fetchState();
-    }, localRef.current ? 400 : 8000);
-    return () => clearInterval(iv);
+
+    // Solo mode: ticks locally in-memory (400ms) with zero network calls
+    if (localRef.current) {
+      const iv = setInterval(() => {
+        if (terminatedReason || pubRef.current?.status === "finished") return;
+        void fetchState();
+      }, 400);
+      return () => clearInterval(iv);
+    }
+
+    // Online multiplayer: Zero continuous polling! Re-sync when user returns to tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !terminatedReason && pubRef.current?.status !== "finished") {
+        void fetchState();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Fallback safety poll ONLY if Pusher is not configured at all in .env
+    const pusher = getPusherClient();
+    let fallbackIv: NodeJS.Timeout | undefined;
+    if (!pusher) {
+      fallbackIv = setInterval(() => {
+        if (terminatedReason || pubRef.current?.status === "finished") return;
+        void fetchState();
+      }, 10000);
+    }
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (fallbackIv) clearInterval(fallbackIv);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
 
@@ -301,12 +336,15 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     chUpper.bind("game-updated", onGameUpdated);
     chUpper.bind("game-destroyed", onGameDestroyed);
 
-    if (chLower) {
-      chLower.bind("game-updated", onGameUpdated);
-      chLower.bind("game-destroyed", onGameDestroyed);
-    }
+    const onConnected = () => {
+      if (!terminatedReason && pubRef.current?.status !== "finished") {
+        void fetchState();
+      }
+    };
+    pusher.connection.bind("connected", onConnected);
 
     return () => {
+      pusher.connection.unbind("connected", onConnected);
       chUpper.unbind("game-updated", onGameUpdated);
       chUpper.unbind("game-destroyed", onGameDestroyed);
       pusher.unsubscribe(idUpper);
@@ -316,7 +354,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
         pusher.unsubscribe(idLower);
       }
     };
-  }, [gameId]);
+  }, [gameId, fetchState, terminatedReason]);
 
   // Secondary: Pusher channel for room code (if known)
   useEffect(() => {
@@ -489,7 +527,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const doRoll = useCallback(async () => {
     const c = credsRef.current;
     const st = pubRef.current;
-    if (!c || !st || st.status !== "playing" || pausedRef.current) return;
+    if (!c || !st || st.status !== "playing" || pausedRef.current || rolling || busy) return;
     const cur = st.players[st.turn];
     if (!cur || cur.id !== c.pid) return;
     sfx.unlock();
@@ -497,12 +535,11 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     try {
       processState(await request("roll", c.pid, c.secret));
     } catch (e) {
+      setRolling(false);
       setErr((e as Error).message);
       setTimeout(() => setErr(""), 2500);
-    } finally {
-      setTimeout(() => setRolling(false), 650);
     }
-  }, [request, processState]);
+  }, [request, processState, rolling, busy]);
 
   // Bot driver: a persistent interval that reads ONLY refs. It never re-subscribes
   // on poll updates, so nothing can ever cancel a pending CPU turn. The host (or
@@ -673,7 +710,15 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     }
   }, [pub?.status, creds, router, gameId, isSolo]);
 
-  const canRoll = Boolean(pub && me && current?.you && pub.status === "playing" && !rolling && !paused);
+  const canRoll = Boolean(pub && me && current?.you && pub.status === "playing" && !rolling && !busy && !paused);
+  const lastRolledText = useMemo(() => {
+    if (!lastRolled) return null;
+    const p = pub?.players.find((pl) => pl.id === lastRolled.pid);
+    const isMe = p?.you || lastRolled.pid === me?.id;
+    if (isMe) return `🎲 You rolled a ${lastRolled.dice}!`;
+    return `🎲 ${p?.name ?? "Opponent"} rolled a ${lastRolled.dice}!`;
+  }, [lastRolled, pub?.players, me?.id]);
+
   const reason = useMemo(() => {
     if (!pub) return "Loading…";
     if (pub.status !== "playing") return "";
@@ -843,6 +888,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
                 reason={reason}
                 onRoll={doRoll}
                 compact={vp.isPhone}
+                lastRolledText={lastRolledText}
               />
             )}
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { BoardDef } from "@/game/boards";
@@ -20,7 +20,7 @@ export interface ScenePlayer {
   finished: boolean;
 }
 
-export default function Scene({
+function Scene({
   def,
   ladders,
   snakes,
@@ -167,6 +167,8 @@ export default function Scene({
     </div>
   );
 }
+
+export default memo(Scene);
 
 function ResponsiveFog({ def, flat }: { def: BoardDef; flat: boolean }) {
   const { scene, camera } = useThree();

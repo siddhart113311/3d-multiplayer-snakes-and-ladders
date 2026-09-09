@@ -14,7 +14,7 @@ import { buildSnakeCurve } from "@/game/snakeCurves";
 import { sfx } from "@/game/sounds";
 import { api, clearCreds, loadCreds, PlayerCreds, saveCreds, saveLocalScore } from "@/lib/api";
 import { useViewport } from "@/lib/useViewport";
-import { FireTimer, GameOverOverlay, HudPlayer, HuntTimer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
+import { ElapsedTimer, FireTimer, GameOverOverlay, HudPlayer, HuntTimer, LogTicker, PauseOverlay, PlayerTray, RollDock, TopBar } from "@/components/hud";
 import ChatDock, { type ChatMsg } from "@/components/ChatDock";
 import type { ParticlesHandle } from "@/components/three/Particles";
 import { getPusherClient } from "@/lib/pusher/client";
@@ -71,7 +71,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
   const [err, setErr] = useState("");
-  const [now, setNow] = useState(Date.now());
+  const [charging, setCharging] = useState(false);
   const [joinName, setJoinName] = useState("");
   const [busy, setBusy] = useState(false);
   const [scoreName, setScoreName] = useState("");
@@ -370,12 +370,47 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // hazard countdown ticker — 500ms is enough since the display only shows whole seconds
+  // Snakes glow just before they act — scheduled with precision setTimeout (zero continuous re-renders)
   useEffect(() => {
-    const period = pub?.mode === "hunt" ? 500 : 300;
-    const iv = setInterval(() => setNow(Date.now()), period);
-    return () => clearInterval(iv);
-  }, [pub?.mode]);
+    if (pub?.status !== "playing") {
+      setCharging(false);
+      return;
+    }
+    const nextAt = pub.mode === "fire" ? pub.nextSnakeAt : pub.mode === "hunt" ? pub.nextCreepAt : 0;
+    const leadTime = pub.mode === "fire" ? 4500 : 1500;
+    if (!nextAt) {
+      setCharging(false);
+      return;
+    }
+
+    const nowMs = Date.now();
+    const timeUntilStart = nextAt - leadTime - nowMs;
+    const timeUntilEnd = nextAt - nowMs;
+
+    if (timeUntilEnd <= 0) {
+      setCharging(false);
+      return;
+    }
+
+    let tEnd: NodeJS.Timeout | undefined;
+    let tStart: NodeJS.Timeout | undefined;
+
+    if (timeUntilStart <= 0) {
+      setCharging(true);
+      tEnd = setTimeout(() => setCharging(false), timeUntilEnd);
+    } else {
+      setCharging(false);
+      tStart = setTimeout(() => {
+        setCharging(true);
+        tEnd = setTimeout(() => setCharging(false), leadTime);
+      }, timeUntilStart);
+    }
+
+    return () => {
+      if (tStart) clearTimeout(tStart);
+      if (tEnd) clearTimeout(tEnd);
+    };
+  }, [pub?.status, pub?.mode, pub?.nextCreepAt, pub?.nextSnakeAt]);
 
   const me = useMemo(() => pub?.players.find((p) => p.you) ?? null, [pub]);
   const current = pub ? pub.players[pub.turn] : null;
@@ -656,12 +691,22 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       .sort((a, b) => b.score - a.score);
   }, [pub]);
 
-  // Snakes glow just before they act — a fire migration or a hunt step.
-  const charging = Boolean(
-    pub?.status === "playing" &&
-      ((pub.mode === "fire" && pub.nextSnakeAt - now < 4500 && pub.nextSnakeAt - now > 0) ||
-        (pub.mode === "hunt" && pub.nextCreepAt - now < 1500 && pub.nextCreepAt - now > 0))
+  const scenePlayers = useMemo(
+    () => pub?.players.map((p) => ({ id: p.id, color: p.color, finished: p.finished })) ?? [],
+    [pub?.players]
   );
+
+  const onParticlesReady = useCallback((h: ParticlesHandle | null) => {
+    if (bridgeRef.current && h) {
+      bridgeRef.current.burst = (pos: THREE.Vector3, color: string, count?: number, speed?: number) =>
+        h.burst(pos, color, count, speed);
+    }
+  }, []);
+
+  const onToggleMute = useCallback(() => setMuted(sfx.toggleMute()), []);
+  const onPauseGame = useCallback(() => setPaused(true), []);
+  const onResumeGame = useCallback(() => setPaused(false), []);
+  const onGoHome = useCallback(() => router.push("/"), [router]);
 
   if (!pub) {
     return (
@@ -676,7 +721,6 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
 
   const def = defRef.current ?? getBoard(pub.board, clampSize(pub.size ?? DEFAULT_SIZE));
   const needsJoin = !isSolo && !creds && pub.status === "waiting";
-  const elapsed = pub.startedAt ? Math.max(0, Math.floor((now - pub.startedAt) / 1000)) : 0;
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-[#060b18]">
@@ -692,17 +736,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
           ladders={pub.ladders}
           snakes={pub.snakes}
           snakeVisuals={bridgeRef.current.snakes}
-          players={pub.players.map((p) => ({ id: p.id, color: p.color, finished: p.finished }))}
+          players={scenePlayers}
           tokenVisuals={bridgeRef.current.tokens}
           activePlayerId={current?.id}
           activeCell={current && !current.finished ? current.pos : -1}
           charging={charging}
           shake={bridgeRef.current.shake}
-          onParticlesReady={(h: ParticlesHandle | null) => {
-            if (bridgeRef.current && h) {
-              bridgeRef.current.burst = (pos: THREE.Vector3, color: string, count?: number, speed?: number) => h.burst(pos, color, count, speed);
-            }
-          }}
+          onParticlesReady={onParticlesReady}
           rotateSignal={rotateSignal}
           flatView={flatView}
         />
@@ -732,7 +772,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
               <ChatDock
                 messages={pub.chat ?? []}
                 myId={me?.id ?? ""}
-                onSend={(t) => void sendChat(t)}
+                onSend={sendChat}
                 disabled={!creds}
                 compact={vp.isPhone}
               />
@@ -740,8 +780,8 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
                 code={code}
                 mode={pub.mode}
                 muted={muted}
-                onMute={() => setMuted(sfx.toggleMute())}
-                onPause={() => setPaused(true)}
+                onMute={onToggleMute}
+                onPause={onPauseGame}
                 onHome={onLeaveGame}
                 flatView={flatView}
                 onToggleView={toggleView}
@@ -778,9 +818,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
                 <div className="h-4 w-px bg-white/10 md:h-6" />
                 <div className="flex items-center gap-1">
                   {!vp.isPhone && <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-white/40">Time</span>}
-                  <span className="font-mono text-xs font-black text-cyan-300 md:text-sm">
-                    {String(Math.floor(elapsed / 60)).padStart(2, "0")}:{String(elapsed % 60).padStart(2, "0")}
-                  </span>
+                  <ElapsedTimer startedAt={pub.startedAt ?? 0} />
                 </div>
               </div>
             )}
@@ -803,7 +841,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
                 rolling={rolling}
                 canRoll={canRoll}
                 reason={reason}
-                onRoll={() => void doRoll()}
+                onRoll={doRoll}
                 compact={vp.isPhone}
               />
             )}
@@ -854,10 +892,10 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       <AnimatePresence>
         {paused && pub.status !== "finished" && (
           <PauseOverlay
-            onResume={() => setPaused(false)}
+            onResume={onResumeGame}
             onQuit={onLeaveGame}
             muted={muted}
-            onMute={() => setMuted(sfx.toggleMute())}
+            onMute={onToggleMute}
             isHost={isHost}
             onDestroy={onDestroyGame}
           />
@@ -875,7 +913,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
               <h3 className="font-display text-xl font-black text-white">Game Terminated</h3>
               <p className="text-xs text-white/60">{terminatedReason}</p>
               <button
-                onClick={() => router.push("/")}
+                onClick={onGoHome}
                 className="rounded-2xl bg-gradient-to-r from-emerald-400 to-cyan-400 py-3 text-sm font-black uppercase tracking-widest text-slate-950 transition hover:brightness-110"
               >
                 Return to Menu
@@ -898,9 +936,17 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
             onSave={() => void saveScore()}
             saved={saved}
             onRematch={() => void rematch()}
-            onHome={() => router.push("/")}
+            onHome={onGoHome}
             rematchLabel={isSolo ? "New Run" : "Instant Rematch"}
-            subtitle={isSolo ? `${pub.moveCount} turns · ${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : undefined}
+            subtitle={
+              isSolo && pub.startedAt
+                ? `${pub.moveCount} turns · ${Math.floor(
+                    Math.max(0, (pub.lastActionAt || Date.now()) - pub.startedAt) / 60000
+                  )}m ${Math.floor(
+                    (Math.max(0, (pub.lastActionAt || Date.now()) - pub.startedAt) / 1000) % 60
+                  )}s`
+                : undefined
+            }
           />
         )}
       </AnimatePresence>

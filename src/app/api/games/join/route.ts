@@ -39,24 +39,38 @@ export async function POST(req: Request) {
     if (!player) return Response.json({ error: "Lobby is full (4 players)" }, { status: 400 });
     logLinePublic(state, `${player.name} joined the lobby`);
 
-    await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, gameId));
+    // Update in-memory cache immediately (instant, <1ms)
     setCachedGame(gameId, code, state);
 
-    const pub = publicStateBroadcast(state);
-    await Promise.allSettled([
-      triggerGameEvent([gameId, code], "lobby-updated", {
-        code,
-        state: pub,
-        serverNow: Date.now(),
-      }),
-      triggerGameEvent([gameId, code], "game-updated", {
-        code,
-        state: pub,
-        serverNow: Date.now(),
-      }),
-    ]);
+    const response = Response.json({ gameId, code, playerId: player.id, secret: player.secret, status: state.status });
 
-    return Response.json({ gameId, code, playerId: player.id, secret: player.secret, status: state.status });
+    // Fire DB write + Pusher broadcasts in the background
+    const pub = publicStateBroadcast(state);
+    void (async () => {
+      try {
+        await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, gameId));
+      } catch (e) {
+        console.error("[join] background DB write failed:", e);
+      }
+      try {
+        await Promise.allSettled([
+          triggerGameEvent([gameId, code], "lobby-updated", {
+            code,
+            state: pub,
+            serverNow: Date.now(),
+          }),
+          triggerGameEvent([gameId, code], "game-updated", {
+            code,
+            state: pub,
+            serverNow: Date.now(),
+          }),
+        ]);
+      } catch (e) {
+        console.error("[join] background Pusher trigger failed:", e);
+      }
+    })();
+
+    return response;
   } catch (e) {
     console.error("Join lobby failed:", e);
     return Response.json({ error: databaseError(e) }, { status: 503 });

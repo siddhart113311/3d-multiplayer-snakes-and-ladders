@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Flame, MessageSquare, Send, X } from "lucide-react";
 import { TAUNTS } from "@/game/engine";
@@ -16,7 +16,7 @@ export interface ChatMsg {
   taunt?: boolean;
 }
 
-export default function ChatDock({
+export default memo(function ChatDock({
   messages,
   myId,
   onSend,
@@ -229,4 +229,4 @@ export default function ChatDock({
       </AnimatePresence>
     </>
   );
-}
+});

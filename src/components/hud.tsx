@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpToLine as LadderIcon, Box, Crosshair, Crown, Flame, Grid2x2, Home, LogOut, Mic, Pause, Play, Skull, Swords, Trash2, Trophy, Volume2, VolumeX } from "lucide-react";
 import DiceCube from "./DiceCube";
@@ -17,7 +18,7 @@ export interface HudPlayer {
   you: boolean;
 }
 
-export function PlayerTray({
+export const PlayerTray = React.memo(function PlayerTray({
   players,
   turnId,
   last,
@@ -100,21 +101,25 @@ export function PlayerTray({
                       SPEAKING
                     </span>
                   )}
-                  {p.isBot && <span className="rounded bg-white/10 px-1 text-[9px] font-bold tracking-wider text-slate-300">BOT</span>}
-                  {p.finishOrder === 1 && <Crown className="h-3.5 w-3.5 text-amber-300" />}
+                  {p.isBot && <span className="rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-bold text-white/50">BOT</span>}
+                  {p.finishOrder > 0 && (
+                    <span className="flex items-center gap-0.5 rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                      <Crown className="h-3 w-3" /> #{p.finishOrder}
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2 text-[11px] text-slate-300/90">
-                  <span className="font-mono">{p.pos < 0 ? "start" : `${p.pos + 1}/${last + 1}`}</span>
+                <div className="flex items-center gap-2 text-xs text-white/60">
+                  <span className="font-mono font-medium">
+                    Tile {p.pos < 0 ? "Start" : `${p.pos + 1}/${last + 1}`}
+                  </span>
                   {p.ladders > 0 && (
-                    <span className="inline-flex items-center gap-0.5 text-amber-300">
-                      <LadderIcon className="h-3 w-3" />
-                      {p.ladders}
+                    <span className="flex items-center gap-0.5 text-emerald-300">
+                      <LadderIcon className="h-3 w-3" /> {p.ladders}
                     </span>
                   )}
                   {p.gulped > 0 && (
-                    <span className="inline-flex items-center gap-0.5 text-rose-300">
-                      <Skull className="h-3 w-3" />
-                      {p.gulped}
+                    <span className="flex items-center gap-0.5 text-rose-300">
+                      <Skull className="h-3 w-3" /> {p.gulped}
                     </span>
                   )}
                 </div>
@@ -125,9 +130,9 @@ export function PlayerTray({
       </AnimatePresence>
     </div>
   );
-}
+});
 
-export function FireTimer({
+export const FireTimer = React.memo(function FireTimer({
   nextSnakeAt,
   interval,
   compact = false,
@@ -136,8 +141,16 @@ export function FireTimer({
   interval: number;
   compact?: boolean;
 }) {
-  const remain = Math.max(0, nextSnakeAt - Date.now());
-  const frac = remain / interval;
+  const [remain, setRemain] = useState(() => Math.max(0, nextSnakeAt - Date.now()));
+
+  useEffect(() => {
+    const update = () => setRemain(Math.max(0, nextSnakeAt - Date.now()));
+    update();
+    const timer = setInterval(update, 250);
+    return () => clearInterval(timer);
+  }, [nextSnakeAt]);
+
+  const frac = interval > 0 ? Math.min(1, Math.max(0, remain / interval)) : 0;
   const urgent = remain < 4000;
   return (
     <div
@@ -162,10 +175,10 @@ export function FireTimer({
       </span>
     </div>
   );
-}
+});
 
 /** Hunt mode: countdown until the stalking pack takes another step. */
-export function HuntTimer({
+export const HuntTimer = React.memo(function HuntTimer({
   nextCreepAt,
   interval,
   compact = false,
@@ -174,8 +187,16 @@ export function HuntTimer({
   interval: number;
   compact?: boolean;
 }) {
-  const remain = Math.max(0, nextCreepAt - Date.now());
-  const frac = interval > 0 ? remain / interval : 0;
+  const [remain, setRemain] = useState(() => Math.max(0, nextCreepAt - Date.now()));
+
+  useEffect(() => {
+    const update = () => setRemain(Math.max(0, nextCreepAt - Date.now()));
+    update();
+    const timer = setInterval(update, 100);
+    return () => clearInterval(timer);
+  }, [nextCreepAt]);
+
+  const frac = interval > 0 ? Math.min(1, Math.max(0, remain / interval)) : 0;
   const imminent = remain < 1500;
   return (
     <div
@@ -200,9 +221,33 @@ export function HuntTimer({
       </span>
     </div>
   );
-}
+});
 
-export function LogTicker({ lines }: { lines: string[] }) {
+/** Isolated solo timer that updates every second without causing parent re-renders. */
+export const ElapsedTimer = React.memo(function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(() =>
+    startedAt > 0 ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0
+  );
+
+  useEffect(() => {
+    if (!startedAt) return;
+    const update = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
+
+  const mins = String(Math.floor(elapsed / 60)).padStart(2, "0");
+  const secs = String(elapsed % 60).padStart(2, "0");
+
+  return (
+    <span className="font-mono text-xs font-black text-cyan-300 md:text-sm">
+      {mins}:{secs}
+    </span>
+  );
+});
+
+export const LogTicker = React.memo(function LogTicker({ lines }: { lines: string[] }) {
   const last3 = lines.slice(-3);
   return (
     <div className="pointer-events-none flex max-w-xs flex-col gap-1">
@@ -221,9 +266,9 @@ export function LogTicker({ lines }: { lines: string[] }) {
       </AnimatePresence>
     </div>
   );
-}
+});
 
-export function RollDock({
+export const RollDock = React.memo(function RollDock({
   dice,
   rolling,
   canRoll,
@@ -267,9 +312,9 @@ export function RollDock({
       </div>
     </div>
   );
-}
+});
 
-export function TopBar({
+export const TopBar = React.memo(function TopBar({
   code,
   mode,
   muted,
@@ -335,7 +380,7 @@ export function TopBar({
       </button>
     </div>
   );
-}
+});
 
 export function PauseOverlay({
   onResume,
@@ -386,7 +431,7 @@ export function PauseOverlay({
   );
 }
 
-export function GameOverOverlay({
+export const GameOverOverlay = React.memo(function GameOverOverlay({
   winnerName,
   winnerColor,
   youWon,
@@ -477,4 +522,4 @@ export function GameOverOverlay({
       </motion.div>
     </motion.div>
   );
-}
+});

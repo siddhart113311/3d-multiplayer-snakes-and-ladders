@@ -52,15 +52,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   addChat(state, { playerId: me.id, name: me.name, color: me.color, text });
-  await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, id));
+  // Update in-memory cache immediately (instant, <1ms)
   setCachedGame(id, code, state);
 
-  await triggerGameEvent([id, code], "game-updated", {
-    code,
-    state: publicStateBroadcast(state),
-    serverNow: Date.now(),
-  });
+  const serverNow = Date.now();
+  const response = Response.json({ ok: true, state: publicState(state, me.id), serverNow });
 
-  return Response.json({ ok: true, state: publicState(state, me.id), serverNow: Date.now() });
+  // Fire DB write + Pusher broadcast in background
+  const pubForBroadcast = publicStateBroadcast(state);
+  void (async () => {
+    try {
+      await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, id));
+    } catch (e) {
+      console.error("[chat] background DB write failed:", e);
+    }
+    try {
+      await triggerGameEvent([id, code], "game-updated", {
+        code,
+        state: pubForBroadcast,
+        serverNow,
+      });
+    } catch (e) {
+      console.error("[chat] background Pusher trigger failed:", e);
+    }
+  })();
+
+  return response;
 }
 

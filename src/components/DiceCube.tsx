@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 const PIPS: Record<number, number[]> = {
   1: [4],
@@ -44,7 +44,7 @@ const FACE_T = [
   "rotateX(180deg) translateZ(26px)",
 ];
 
-export default function DiceCube({ value, rolling, size = 52 }: { value: number; rolling: boolean; size?: number }) {
+export default memo(function DiceCube({ value, rolling, size = 52 }: { value: number; rolling: boolean; size?: number }) {
   const [shown, setShown] = useState(value || 1);
   const [settled, setSettled] = useState(true);
 
@@ -76,4 +76,4 @@ export default function DiceCube({ value, rolling, size = 52 }: { value: number;
       </div>
     </div>
   );
-}
+});

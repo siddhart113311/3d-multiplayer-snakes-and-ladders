@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
-import { addPlayer, GameState, logLinePublic, normalizeState, publicState } from "@/game/engine";
+import { addPlayer, GameState, logLinePublic, normalizeState, publicState, publicStateBroadcast } from "@/game/engine";
 import { getCachedGame, setCachedGame } from "@/game/gameCache";
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     await db.update(games).set({ state, updatedAt: new Date() }).where(eq(games.id, gameId));
     setCachedGame(gameId, code, state);
 
-    const pub = publicState(state);
+    const pub = publicStateBroadcast(state);
     await Promise.allSettled([
       triggerGameEvent([gameId, code], "lobby-updated", {
         code,

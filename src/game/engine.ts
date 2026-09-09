@@ -783,3 +783,49 @@ export function publicState(state: GameState, forPlayerId?: string) {
     })),
   };
 }
+
+/**
+ * Lightweight broadcast payload for Pusher (must fit under 10KB).
+ * Strips chat history and trims events to the most recent 8.
+ * Clients receive the full state via direct HTTP responses; this
+ * is only used for real-time push notifications to other players.
+ */
+export function publicStateBroadcast(state: GameState) {
+  normalizeState(state);
+  return {
+    board: state.board,
+    size: state.size,
+    mode: state.mode,
+    status: state.status,
+    hostId: state.hostId,
+    turn: state.turn,
+    dice: state.dice,
+    winner: state.winner,
+    seq: state.seq,
+    moveCount: state.moveCount,
+    fireIntervalMs: state.fireIntervalMs,
+    nextSnakeAt: state.nextSnakeAt,
+    huntIntervalMs: state.huntIntervalMs,
+    nextCreepAt: state.nextCreepAt,
+    lastActionAt: state.lastActionAt,
+    startedAt: state.startedAt,
+    scores: state.scores,
+    log: state.log.slice(-4),
+    chat: state.chat.slice(-5),
+    snakes: state.snakes,
+    ladders: state.ladders,
+    events: state.events.slice(-8),
+    players: state.players.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      isBot: p.isBot,
+      pos: p.pos,
+      finished: p.finished,
+      finishOrder: p.finishOrder,
+      ladders: p.ladders,
+      gulped: p.gulped,
+      lastSeen: p.lastSeen,
+    })),
+  };
+}

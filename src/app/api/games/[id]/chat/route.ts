@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
-import { addChat, GameState, normalizeState, publicState } from "@/game/engine";
+import { addChat, GameState, normalizeState, publicState, publicStateBroadcast } from "@/game/engine";
 import { getCachedGame, setCachedGame } from "@/game/gameCache";
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
@@ -57,7 +57,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   await triggerGameEvent([id, code], "game-updated", {
     code,
-    state: publicState(state),
+    state: publicStateBroadcast(state),
     serverNow: Date.now(),
   });
 

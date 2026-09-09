@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { databaseError, ensureDatabase } from "@/db/ensure";
 import { games } from "@/db/schema";
-import { advanceWorld, checkPlayerLiveness, GameState, normalizeState, publicState } from "@/game/engine";
+import { advanceWorld, checkPlayerLiveness, GameState, normalizeState, publicState, publicStateBroadcast } from "@/game/engine";
 import { getCachedGame, removeCachedGame, setCachedGame } from "@/game/gameCache";
 import { triggerGameEvent } from "@/lib/pusher/server";
 import { eq } from "drizzle-orm";
@@ -77,20 +77,29 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     // 5. If state mutated (hazard moved or player converted to bot), broadcast and persist to DB
     if (livenessChanged || hazardAdvanced) {
       cached.updatedAt = now;
-      // Broadcast state update immediately via Pusher WebSockets to all players
-      await triggerGameEvent([id, code], "game-updated", {
-        code,
-        state: publicState(state),
-        serverNow: now,
-      });
-
-      // Persist state change to DB
-      await ensureDatabase().catch(() => undefined);
-      await db
-        .update(games)
-        .set({ state, status: state.status, updatedAt: new Date() })
-        .where(eq(games.id, id))
-        .catch((e) => console.error("Database update failed:", e));
+      // Fire DB write + Pusher broadcast in the background (non-blocking).
+      // The response is returned immediately from the in-memory cache.
+      const pubForBroadcast = publicStateBroadcast(state);
+      void (async () => {
+        try {
+          await triggerGameEvent([id, code], "game-updated", {
+            code,
+            state: pubForBroadcast,
+            serverNow: now,
+          });
+        } catch (e) {
+          console.error("[GET] background Pusher trigger failed:", e);
+        }
+        try {
+          await ensureDatabase().catch(() => undefined);
+          await db
+            .update(games)
+            .set({ state, status: state.status, updatedAt: new Date() })
+            .where(eq(games.id, id));
+        } catch (e) {
+          console.error("[GET] background DB write failed:", e);
+        }
+      })();
     }
 
     // 6. Return response directly from hot memory (zero DB queries on normal reads)

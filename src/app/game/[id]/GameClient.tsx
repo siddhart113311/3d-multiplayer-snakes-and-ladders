@@ -81,6 +81,8 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const [animating, setAnimating] = useState(false);
   const [speakingPlayerIds, setSpeakingPlayerIds] = useState<string[]>([]);
   const [terminatedReason, setTerminatedReason] = useState<string | null>(null);
+  /** State-driven confirm dialog (replaces window.confirm which gets dismissed by re-renders). */
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   const bridgeRef = useRef<Bridge | null>(null);
   const directorRef = useRef<Director | null>(null);
@@ -368,9 +370,9 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // hazard countdown ticker — hunt ticks every ~2.6s, so it needs finer updates
+  // hazard countdown ticker — 500ms is enough since the display only shows whole seconds
   useEffect(() => {
-    const period = pub?.mode === "hunt" ? 100 : 300;
+    const period = pub?.mode === "hunt" ? 500 : 300;
     const iv = setInterval(() => setNow(Date.now()), period);
     return () => clearInterval(iv);
   }, [pub?.mode]);
@@ -391,33 +393,47 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     return () => clearTimeout(t);
   }, [isHost, pub?.status, pub?.mode, pub?.nextCreepAt, pub?.nextSnakeAt, fetchState]);
 
-  const onDestroyGame = useCallback(async () => {
-    if (!window.confirm("Are you sure you want to terminate and delete this game? All players will be disconnected, the voice room will close, and this game will be permanently deleted from the database.")) return;
-    const c = credsRef.current;
-    if (!c || !gameId) return;
-    try {
-      await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret });
-      clearCreds(gameId);
-      router.push("/");
-    } catch (e) {
-      setErr((e as Error).message);
-      setTimeout(() => setErr(""), 2500);
-    }
+  const onDestroyGame = useCallback(() => {
+    setConfirmDialog({
+      message: "Are you sure you want to terminate and delete this game? All players will be disconnected, the voice room will close, and this game will be permanently deleted.",
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        const c = credsRef.current;
+        if (!c || !gameId) return;
+        try {
+          await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret });
+          clearCreds(gameId);
+          router.push("/");
+        } catch (e) {
+          setErr((e as Error).message);
+          setTimeout(() => setErr(""), 2500);
+        }
+      },
+    });
   }, [gameId, router]);
 
-  const onLeaveGame = useCallback(async () => {
+  const onLeaveGame = useCallback(() => {
     const c = credsRef.current;
     if (c && gameId && !isSolo) {
-      if (isHost) {
-        if (!window.confirm("Leaving as host will terminate the game for all players. Are you sure you want to quit?")) return;
-        await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret }).catch(() => {});
-      } else {
-        if (!window.confirm("Are you sure you want to leave? A CPU player will take over your spot.")) return;
-        await api(`/api/games/${gameId}/action`, { action: "leave", pid: c.pid, secret: c.secret }).catch(() => {});
-      }
-      clearCreds(gameId);
+      const message = isHost
+        ? "Leaving as host will terminate the game for all players. Are you sure you want to quit?"
+        : "Are you sure you want to leave? A CPU player will take over your spot.";
+      setConfirmDialog({
+        message,
+        onConfirm: async () => {
+          setConfirmDialog(null);
+          if (isHost) {
+            await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret }).catch(() => {});
+          } else {
+            await api(`/api/games/${gameId}/action`, { action: "leave", pid: c.pid, secret: c.secret }).catch(() => {});
+          }
+          clearCreds(gameId);
+          router.push("/");
+        },
+      });
+    } else {
+      router.push("/");
     }
-    router.push("/");
   }, [gameId, isSolo, isHost, router]);
 
   // If user closes tab or navigates away, inform the server immediately via beacon
@@ -895,6 +911,42 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
           <Bot className="h-3.5 w-3.5" /> Spectating
         </div>
       )}
+
+      {/* Confirm dialog (replaces window.confirm which gets dismissed by re-renders) */}
+      <AnimatePresence>
+        {confirmDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 16 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 16 }}
+              className="flex w-full max-w-sm flex-col gap-4 rounded-3xl border border-white/15 bg-slate-950/95 p-6 shadow-2xl mx-4"
+            >
+              <h3 className="text-center font-display text-lg font-black text-white">Are you sure?</h3>
+              <p className="text-center text-sm text-white/70 leading-relaxed">{confirmDialog.message}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmDialog(null)}
+                  className="flex-1 rounded-2xl border border-white/15 bg-white/5 py-3 text-sm font-bold text-white/80 transition hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDialog.onConfirm}
+                  className="flex-1 rounded-2xl bg-gradient-to-r from-rose-500 to-red-500 py-3 text-sm font-black text-white transition hover:brightness-110"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

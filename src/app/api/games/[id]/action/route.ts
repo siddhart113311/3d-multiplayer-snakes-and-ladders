@@ -9,6 +9,7 @@ import {
   logLinePublic,
   normalizeState,
   publicState,
+  publicStateBroadcast,
   rematch,
   startGame,
 } from "@/game/engine";
@@ -180,42 +181,56 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
-  await db
-    .update(games)
-    .set({ state, status: state.status, updatedAt: new Date() })
-    .where(eq(games.id, id));
-
+  // Update in-memory cache immediately (instant, <1ms)
   setCachedGame(id, code, state);
 
-  const pubForBroadcast = publicState(state);
-  const targets = [id, code];
-
-  const triggers: Promise<boolean>[] = [
-    triggerGameEvent(targets, "game-updated", {
-      code,
-      state: pubForBroadcast,
-      serverNow: Date.now(),
-    }),
-  ];
-
-  if (state.status === "waiting" || body.action === "start") {
-    triggers.push(
-      triggerGameEvent(targets, "lobby-updated", {
-        code,
-        state: pubForBroadcast,
-        serverNow: Date.now(),
-      })
-    );
-  }
-
-  await Promise.allSettled(triggers);
-
-  return Response.json({
+  // Build and return the response NOW — don't block on DB or Pusher
+  const serverNow = Date.now();
+  const response = Response.json({
     ok: true,
     gameId: id,
     code,
     state: publicState(state, body.pid),
-    serverNow: Date.now(),
+    serverNow,
     rollerSecret: undefined,
   });
+
+  // Fire DB write + Pusher broadcast in the background (non-blocking).
+  // The caller already has the new state in the response body.
+  // Other clients will receive it via Pusher moments later.
+  const pubForBroadcast = publicStateBroadcast(state);
+  const targets = [id, code];
+  void (async () => {
+    try {
+      await db
+        .update(games)
+        .set({ state, status: state.status, updatedAt: new Date() })
+        .where(eq(games.id, id));
+    } catch (e) {
+      console.error("[action] background DB write failed:", e);
+    }
+    try {
+      const triggers: Promise<boolean>[] = [
+        triggerGameEvent(targets, "game-updated", {
+          code,
+          state: pubForBroadcast,
+          serverNow,
+        }),
+      ];
+      if (state.status === "waiting" || body.action === "start") {
+        triggers.push(
+          triggerGameEvent(targets, "lobby-updated", {
+            code,
+            state: pubForBroadcast,
+            serverNow,
+          })
+        );
+      }
+      await Promise.allSettled(triggers);
+    } catch (e) {
+      console.error("[action] background Pusher trigger failed:", e);
+    }
+  })();
+
+  return response;
 }

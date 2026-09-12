@@ -17,12 +17,26 @@ export interface TokenVisual {
   bobSeed: number;
 }
 
+/** Number of control points stored per snake (head=0, tail=N-1). */
+export const MAX_SNAKE_PTS = 14;
+
 export interface SnakeVisual {
-  curve: THREE.CatmullRomCurve3;
-  version: number;
+  /** Pre-allocated flat array: MAX_SNAKE_PTS × 3 floats (x,y,z per point). */
+  controlPts: Float32Array;
+  numPts: number;
   mouth: number; // 0 closed … 1 wide open
   /** t = position along the body (0 head → 1 tail), amp = swell strength 0..1 */
   bulge: { t: number; active: boolean; amp: number };
+}
+
+/** Factory — one allocation that is reused for the lifetime of the snake. */
+export function createSnakeVisual(): SnakeVisual {
+  return {
+    controlPts: new Float32Array(MAX_SNAKE_PTS * 3),
+    numPts: MAX_SNAKE_PTS,
+    mouth: 0,
+    bulge: { t: 0, active: false, amp: 0 },
+  };
 }
 
 export interface Bridge {
@@ -48,10 +62,43 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2,
 const easeOut = (t: number) => 1 - (1 - t) * (1 - t);
 const easeIn = (t: number) => t * t;
 
-function sampleCurve(curve: THREE.CatmullRomCurve3, n: number): THREE.Vector3[] {
-  const pts: THREE.Vector3[] = [];
-  for (let i = 0; i <= n; i++) pts.push(curve.getPoint(i / n));
-  return pts;
+/** Temp vector reused for zero-allocation spline lookups. */
+const _splineTmp = new THREE.Vector3();
+
+/** Sample a CatmullRomCurve3 at n equally-spaced points into a flat Float32Array. */
+export function sampleCurveInto(curve: THREE.CatmullRomCurve3, out: Float32Array, n: number): void {
+  for (let i = 0; i < n; i++) {
+    curve.getPoint(i / (n - 1), _splineTmp);
+    out[i * 3]     = _splineTmp.x;
+    out[i * 3 + 1] = _splineTmp.y;
+    out[i * 3 + 2] = _splineTmp.z;
+  }
+}
+
+/** Evaluate Catmull-Rom through a flat controlPts array at parameter t ∈ [0,1]. */
+function evalSpline(pts: Float32Array, numPts: number, t: number, out: THREE.Vector3): void {
+  const clamped = Math.max(0, Math.min(1, t));
+  const segF = clamped * (numPts - 1);
+  const seg = Math.min(Math.floor(segF), numPts - 2);
+  const lt = segF - seg;
+  const lt2 = lt * lt;
+  const lt3 = lt2 * lt;
+  const i0 = Math.max(0, seg - 1);
+  const i1 = seg;
+  const i2 = Math.min(seg + 1, numPts - 1);
+  const i3 = Math.min(seg + 2, numPts - 1);
+  for (let c = 0; c < 3; c++) {
+    const p0 = pts[i0 * 3 + c];
+    const p1 = pts[i1 * 3 + c];
+    const p2 = pts[i2 * 3 + c];
+    const p3 = pts[i3 * 3 + c];
+    out.setComponent(c, 0.5 * (
+      2 * p1 +
+      (-p0 + p2) * lt +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * lt2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * lt3
+    ));
+  }
 }
 
 interface QueueJob {
@@ -297,10 +344,10 @@ export class Director {
     sfx.slideWhistle();
     await this.tween(0.85, (t) => {
       const e = easeInOut(t);
-      const p = sn.curve.getPoint(e);
-      tk.x = p.x;
-      tk.y = p.y + 0.16;
-      tk.z = p.z;
+      evalSpline(sn.controlPts, sn.numPts, e, _splineTmp);
+      tk.x = _splineTmp.x;
+      tk.y = _splineTmp.y + 0.16;
+      tk.z = _splineTmp.z;
       tk.scale = 1 - e * 0.15;
     });
     await this.tween(0.12, (t) => {
@@ -327,7 +374,7 @@ export class Director {
       tk.z = rest.z;
       return;
     }
-    const head = sn.curve.getPoint(0);
+    const head = new THREE.Vector3(sn.controlPts[0], sn.controlPts[1], sn.controlPts[2]);
 
     // anticipation: mouth opens, snake hisses
     sfx.hiss(0.6);
@@ -403,36 +450,34 @@ export class Director {
 
   /**
    * Hunt-mode: the whole stalking pack glides one cell closer, together.
-   * Animating them in a single tween (rather than one job per snake) keeps the
-   * batch well inside the hunt interval.
+   * Zero per-frame allocation — control points are lerped in-place.
    */
   private async animCreep(ev: Extract<GameEvent, { type: "snakeCreep" }>, colorOf: (pid: string) => string) {
-    const lanes: Array<{ vis: SnakeVisual; from: THREE.Vector3[]; to: THREE.Vector3[] }> = [];
+    const N = MAX_SNAKE_PTS;
+    const lanes: Array<{ vis: SnakeVisual; from: Float32Array; to: Float32Array }> = [];
     for (const mv of ev.moves) {
       const vis = this.snake(mv.snake.id);
       if (!vis) continue;
+      const from = new Float32Array(vis.controlPts); // snapshot current
       const target = buildSnakeCurve(this.bridge.def, mv.snake);
-      lanes.push({ vis, from: sampleCurve(vis.curve, 22), to: sampleCurve(target.curve, 22) });
+      const to = new Float32Array(N * 3);
+      sampleCurveInto(target.curve, to, N);
+      lanes.push({ vis, from, to });
     }
 
     if (lanes.length) {
       sfx.hiss(0.55);
       await this.tween(0.72, (t) => {
         for (const lane of lanes) {
-          const K = lane.from.length;
-          const pts: THREE.Vector3[] = [];
-          for (let i = 0; i < K; i++) {
-            // slight head-to-tail lag reads as a body-following-head slither
-            const lag = (i / K) * 0.28;
+          for (let i = 0; i < N; i++) {
+            const lag = (i / N) * 0.28;
             const local = Math.min(1, Math.max(0, (t - lag) / (1 - 0.28)));
             const e = easeInOut(local);
-            const p = new THREE.Vector3().lerpVectors(lane.from[i], lane.to[i], e);
-            p.y += Math.sin(local * Math.PI) * 0.09;
-            pts.push(p);
+            const b = i * 3;
+            lane.vis.controlPts[b]     = lane.from[b]     + (lane.to[b]     - lane.from[b])     * e;
+            lane.vis.controlPts[b + 1] = lane.from[b + 1] + (lane.to[b + 1] - lane.from[b + 1]) * e + Math.sin(local * Math.PI) * 0.09;
+            lane.vis.controlPts[b + 2] = lane.from[b + 2] + (lane.to[b + 2] - lane.from[b + 2]) * e;
           }
-          lane.vis.curve = new THREE.CatmullRomCurve3(pts, false, "centripetal", 0.5);
-          lane.vis.version += 1;
-          // jaws part as they close in
           lane.vis.mouth = 0.2 + Math.sin(t * Math.PI) * 0.3;
         }
       });
@@ -456,28 +501,26 @@ export class Director {
     sfx.hiss(1.2);
     this.shake(0.12);
 
-    const fromPts = sampleCurve(sn.curve, 26);
+    const N = MAX_SNAKE_PTS;
+    const from = new Float32Array(sn.controlPts);
     const target = buildSnakeCurve(this.bridge.def, ev.snake);
-    const toPts = sampleCurve(target.curve, 26);
-    const K = fromPts.length;
+    const to = new Float32Array(N * 3);
+    sampleCurveInto(target.curve, to, N);
 
     await this.tween(1.4, (t) => {
-      const pts: THREE.Vector3[] = [];
-      for (let i = 0; i < K; i++) {
-        // staggered whip: tail points lag behind the head
-        const lag = (i / K) * 0.45;
+      for (let i = 0; i < N; i++) {
+        const lag = (i / N) * 0.45;
         const local = Math.min(1, Math.max(0, (t - lag) / (1 - 0.45)));
         const e = easeInOut(local);
-        const p = new THREE.Vector3().lerpVectors(fromPts[i], toPts[i], e);
-        p.y += Math.sin(local * Math.PI) * 0.35; // body lifts off while moving
-        pts.push(p);
+        const b = i * 3;
+        sn.controlPts[b]     = from[b]     + (to[b]     - from[b])     * e;
+        sn.controlPts[b + 1] = from[b + 1] + (to[b + 1] - from[b + 1]) * e + Math.sin(local * Math.PI) * 0.35;
+        sn.controlPts[b + 2] = from[b + 2] + (to[b + 2] - from[b + 2]) * e;
       }
-      sn.curve = new THREE.CatmullRomCurve3(pts, false, "centripetal", 0.5);
-      sn.version += 1;
       sn.mouth = Math.sin(t * Math.PI) * 0.6;
     });
-    sn.curve = target.curve;
-    sn.version += 1;
+    // Set final positions
+    sn.controlPts.set(to);
     sn.mouth = 0;
 
     // gulp any players caught on the corridor, one dramatic snack at a time

@@ -126,7 +126,7 @@ function Scene({
             const v = snakeVisuals.get(s.id);
             return v ? (
               <SnakeMesh
-                key={`${s.id}:${s.head}:${s.tail}`}
+                key={s.id}
                 visual={v}
                 paletteIdx={s.id}
                 charging={charging}

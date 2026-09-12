@@ -9,7 +9,7 @@ import { Bot, Trash2, Users } from "lucide-react";
 import { BoardDef, BoardSize, clampSize, DEFAULT_SIZE, getBoard } from "@/game/boards";
 import { GameEvent } from "@/game/engine";
 import { LocalGame, SoloConfig } from "@/game/localGame";
-import { Bridge, Director, SnakeVisual, TokenVisual } from "@/game/director";
+import { Bridge, Director, SnakeVisual, TokenVisual, createSnakeVisual, sampleCurveInto, MAX_SNAKE_PTS } from "@/game/director";
 import { buildSnakeCurve } from "@/game/snakeCurves";
 import { sfx } from "@/game/sounds";
 import { api, clearCreds, loadCreds, PlayerCreds, saveCreds, saveLocalScore } from "@/lib/api";
@@ -129,14 +129,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     for (const s of state.snakes) {
       let v = bridge.snakes.get(s.id);
       if (!v) {
-        v = { curve: buildSnakeCurve(defRef.current, s).curve, version: 0, mouth: 0, bulge: { t: 0, active: false, amp: 0 } };
+        v = createSnakeVisual();
         bridge.snakes.set(s.id, v);
-      } else {
-        v.curve = buildSnakeCurve(defRef.current, s).curve;
-        v.version += 1;
-        v.mouth = 0;
-        v.bulge = { t: 0, active: false, amp: 0 };
       }
+      const sc = buildSnakeCurve(defRef.current, s);
+      sampleCurveInto(sc.curve, v.controlPts, MAX_SNAKE_PTS);
+      v.mouth = 0;
+      v.bulge = { t: 0, active: false, amp: 0 };
     }
   }, []);
 
@@ -454,11 +453,14 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const current = pub ? pub.players[pub.turn] : null;
   const isHost = Boolean(me && pub && me.id === pub.hostId);
 
-  // In Hunt / Fire mode: Host triggers the server hazard tick right as the timer elapses
+  // In Hunt / Fire mode: Host triggers the server hazard tick right as the timer elapses.
+  // Ref-based dedup: only reschedule when the target timestamp actually changes.
+  const hazardNextAtRef = useRef(0);
   useEffect(() => {
     if (localRef.current || !isHost || pub?.status !== "playing") return;
     const nextAt = pub.mode === "hunt" ? pub.nextCreepAt : pub.mode === "fire" ? pub.nextSnakeAt : 0;
-    if (!nextAt) return;
+    if (!nextAt || nextAt === hazardNextAtRef.current) return;
+    hazardNextAtRef.current = nextAt;
     const delay = Math.max(50, nextAt - Date.now() + 50);
     const t = setTimeout(() => {
       void fetchState();

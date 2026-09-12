@@ -101,6 +101,71 @@ export function buildSnakeGeometry(
   return geo;
 }
 
+const _tubeCache = new Map<string, THREE.BufferGeometry>();
+
+/**
+ * One-time static tube geometry for the GPU spline shader.
+ * Each vertex carries `aBodyT` (0 = head … 1 = tail) and `aAngle`
+ * (radial position). The vertex shader bends this along the spline
+ * control points — zero CPU geometry work after initial creation.
+ */
+export function buildStaticSnakeTube(
+  tubular = 96,
+  radial = 12,
+  baseRadius = 0.165,
+): THREE.BufferGeometry {
+  const key = `${tubular}:${radial}`;
+  const cached = _tubeCache.get(key);
+  if (cached) return cached;
+
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const bodyTs: number[] = [];
+  const angles: number[] = [];
+  const indices: number[] = [];
+
+  for (let i = 0; i <= tubular; i++) {
+    const t = i / tubular;
+    const r = radiusAt(t, baseRadius);
+    for (let j = 0; j <= radial; j++) {
+      const angle = (j / radial) * Math.PI * 2;
+      const sin = Math.sin(angle);
+      const cos = -Math.cos(angle);
+      // Placeholder straight tube — shader overrides at runtime
+      positions.push(sin * r, cos * r, t * 5.0);
+      normals.push(sin, cos, 0);
+      uvs.push(t, j / radial);
+      bodyTs.push(t);
+      angles.push(angle);
+    }
+  }
+
+  for (let i = 1; i <= tubular; i++) {
+    for (let j = 1; j <= radial; j++) {
+      const a = (radial + 1) * (i - 1) + (j - 1);
+      const b = (radial + 1) * i + (j - 1);
+      const c = (radial + 1) * i + j;
+      const d = (radial + 1) * (i - 1) + j;
+      indices.push(a, b, d, b, c, d);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setAttribute("aBodyT", new THREE.Float32BufferAttribute(bodyTs, 1));
+  geo.setAttribute("aAngle", new THREE.Float32BufferAttribute(angles, 1));
+  // Large bounding sphere — actual positions are GPU-computed from control points
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
+  geo.computeVertexNormals();
+
+  _tubeCache.set(key, geo);
+  return geo;
+}
+
 function shade(hex: string, amt: number): string {
   const c = new THREE.Color(hex);
   const hsl = { h: 0, s: 0, l: 0 };

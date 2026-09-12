@@ -814,7 +814,7 @@ export function publicStateBroadcast(state: GameState) {
     chat: state.chat.slice(-5),
     snakes: state.snakes,
     ladders: state.ladders,
-    events: state.events.slice(-8),
+    events: state.events.slice(-4),
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,

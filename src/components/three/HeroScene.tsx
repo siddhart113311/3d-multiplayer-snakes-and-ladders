@@ -5,7 +5,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { BoardDef, BoardShape, BoardSize, getBoard } from "@/game/boards";
 import type { Ladder, Snake } from "@/game/engine";
-import type { SnakeVisual, TokenVisual } from "@/game/director";
+import { SnakeVisual, TokenVisual, createSnakeVisual, sampleCurveInto, MAX_SNAKE_PTS } from "@/game/director";
 import { buildSnakeCurve, cellWorld, TOKEN_Y } from "@/game/snakeCurves";
 import { fitCameraDistance, getBreakpoint } from "@/game/viewport";
 import BoardMesh from "./BoardMesh";
@@ -168,7 +168,7 @@ function HeroAnimation({
     }
     t -= tl.walk2;
 
-    const head = snakeVis.curve.getPointAt(0);
+    const head = new THREE.Vector3(snakeVis.controlPts[0], snakeVis.controlPts[1], snakeVis.controlPts[2]);
     const tail = cellWorld(def, snake.tail);
 
     // 4. the jaws open and the token is drawn in
@@ -281,7 +281,12 @@ export default function HeroScene({ shape, fire }: { shape: BoardShape; fire: bo
     [def]
   );
   const snakeVis = useMemo<SnakeVisual>(
-    () => ({ curve: buildSnakeCurve(def, snake).curve, version: 0, mouth: 0, bulge: { t: 0, active: false, amp: 0 } }),
+    () => {
+      const v = createSnakeVisual();
+      const sc = buildSnakeCurve(def, snake);
+      sampleCurveInto(sc.curve, v.controlPts, MAX_SNAKE_PTS);
+      return v;
+    },
     [def, snake]
   );
 

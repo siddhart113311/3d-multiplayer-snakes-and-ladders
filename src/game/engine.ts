@@ -542,19 +542,11 @@ function stepToward(
   return best;
 }
 
-/** One stalking tick: the nearest snakes each crawl a single cell toward the prey. */
-function creepOnce(state: GameState, def: ReturnType<typeof getBoard>) {
+/** One stalking tick: snakes target all player positions so every player is stalked. */
+export function creepOnce(state: GameState, def: ReturnType<typeof getBoard>) {
   const last = def.last;
   const onBoard = state.players.filter((p) => !p.finished && p.pos >= 0);
   if (onBoard.length === 0 || state.snakes.length === 0) return;
-
-  // The pack focuses on whoever is about to move; otherwise the leader.
-  const current = state.players[state.turn];
-  const prey =
-    current && !current.finished && current.pos >= 0
-      ? current
-      : onBoard.reduce((a, b) => (b.pos > a.pos ? b : a));
-  const preyPos = def.cells[prey.pos];
 
   const blocked = new Set<number>([0, last]);
   for (const l of state.ladders) {
@@ -563,21 +555,51 @@ function creepOnce(state: GameState, def: ReturnType<typeof getBoard>) {
   }
   const heads = new Set(state.snakes.map((s) => s.head));
 
-  // Only the closest few actually hunt — the rest stay put as normal hazards.
-  const pack = [...state.snakes]
-    .map((s) => ({ s, d: cellDistance(def, s.head, prey.pos) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, Math.min(HUNT_SNAKES, state.snakes.length));
+  // Every player on the board is targeted by stalking serpents!
+  const assigned = new Map<number, { snake: Snake; targetPlayer: Player }>();
+  const usedSnakes = new Set<number>();
+
+  // 1. For each player on the board, assign their closest available snake
+  for (const p of onBoard) {
+    let bestSnake: Snake | null = null;
+    let bestDist = Infinity;
+    for (const s of state.snakes) {
+      if (usedSnakes.has(s.id)) continue;
+      const d = cellDistance(def, s.head, p.pos);
+      if (d < bestDist) {
+        bestDist = d;
+        bestSnake = s;
+      }
+    }
+    if (bestSnake) {
+      assigned.set(bestSnake.id, { snake: bestSnake, targetPlayer: p });
+      usedSnakes.add(bestSnake.id);
+    }
+  }
+
+  // 2. If additional stalking slots are available (up to HUNT_SNAKES),
+  // assign remaining closest snakes to whichever player is nearest
+  const maxPack = Math.min(HUNT_SNAKES, state.snakes.length);
+  if (usedSnakes.size < maxPack) {
+    const remaining = state.snakes.filter((s) => !usedSnakes.has(s.id));
+    for (const s of remaining) {
+      if (usedSnakes.size >= maxPack) break;
+      const closestPlayer = onBoard.reduce((best, p) =>
+        cellDistance(def, s.head, p.pos) < cellDistance(def, s.head, best.pos) ? p : best
+      );
+      assigned.set(s.id, { snake: s, targetPlayer: closestPlayer });
+      usedSnakes.add(s.id);
+    }
+  }
 
   const moves: Array<{ snake: Snake; prev: Snake }> = [];
   const gulped: Array<{ playerId: string; snakeId: number; from: number; to: number }> = [];
 
-  for (const { s } of pack) {
+  for (const { snake: s, targetPlayer } of assigned.values()) {
     const prev: Snake = { ...s };
     s.span ??= cellDistance(def, s.head, s.tail);
 
-    // Head crawls one cell closer. Staying above its own tail keeps the snake
-    // pointing down-board, so a gulp can never fling a player *forward*.
+    const preyPos = def.cells[targetPlayer.pos];
     heads.delete(s.head);
     const nextHead = stepToward(def, s.head, preyPos, (i) => !blocked.has(i) && !heads.has(i) && i > s.tail + 1);
     s.head = nextHead;
@@ -632,8 +654,8 @@ export function advanceWorld(state: GameState, now: number) {
   // Hunt mode is round-based: the serpent pack stalks deterministically on round completion in applyRoll.
 }
 
-/** Timeout after which an inactive player is considered disconnected/unresponsive (28 seconds). */
-export const UNRESPONSIVE_TIMEOUT_MS = 28000;
+/** Timeout after which an inactive player in lobby or in game is considered timed out (3 minutes). */
+export const UNRESPONSIVE_TIMEOUT_MS = 180000;
 
 export interface LivenessResult {
   hostUnresponsive: boolean;
@@ -643,15 +665,20 @@ export interface LivenessResult {
 
 /**
  * Check if players have disconnected or become unresponsive.
- * - If host has been silent >18s: caller should terminate the game.
- * - If any client has been silent >18s during active play: convert to CPU bot so game keeps moving.
+ * - In lobby ("waiting"): if host has been silent >180s: caller may terminate the lobby.
+ * - In active play ("playing"): the game NEVER terminates due to silence!
+ *   Any silent player (including host) becomes a CPU bot so the game keeps moving without interruption,
+ *   and host ownership migrates to the next remaining human player.
  */
 export function checkPlayerLiveness(state: GameState, now: number): LivenessResult {
   let changed = false;
   const becameCpu: string[] = [];
   const host = state.players.find((p) => p.id === state.hostId);
+
+  // ONLY terminate in lobby if host disappeared
   const hostUnresponsive = Boolean(
-    host &&
+    state.status === "waiting" &&
+      host &&
       !host.isBot &&
       host.lastSeen &&
       now - host.lastSeen > UNRESPONSIVE_TIMEOUT_MS
@@ -659,13 +686,7 @@ export function checkPlayerLiveness(state: GameState, now: number): LivenessResu
 
   if (state.status === "playing") {
     for (const p of state.players) {
-      if (
-        p.id !== state.hostId &&
-        !p.isBot &&
-        !p.finished &&
-        p.lastSeen &&
-        now - p.lastSeen > UNRESPONSIVE_TIMEOUT_MS
-      ) {
+      if (!p.isBot && !p.finished && p.lastSeen && now - p.lastSeen > UNRESPONSIVE_TIMEOUT_MS) {
         p.isBot = true;
         if (!p.name.includes("(CPU)")) {
           p.name = `${p.name} (CPU)`;
@@ -673,6 +694,15 @@ export function checkPlayerLiveness(state: GameState, now: number): LivenessResu
         logLine(state, `${p.name} disconnected and was replaced by CPU.`);
         becameCpu.push(p.name);
         changed = true;
+
+        // If host timed out, migrate host role to next human
+        if (p.id === state.hostId) {
+          const nextHuman = state.players.find((x) => !x.isBot && !x.finished);
+          if (nextHuman) {
+            state.hostId = nextHuman.id;
+            logLine(state, `${nextHuman.name} is now the host.`);
+          }
+        }
       }
     }
   }

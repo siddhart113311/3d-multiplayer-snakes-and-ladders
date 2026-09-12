@@ -502,17 +502,13 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     const c = credsRef.current;
     if (c && gameId && !isSolo) {
       const message = isHost
-        ? "Leaving as host will terminate the game for all players. Are you sure you want to quit?"
+        ? "Are you sure you want to leave? Host controls will transfer to another player and a CPU will take over your spot."
         : "Are you sure you want to leave? A CPU player will take over your spot.";
       setConfirmDialog({
         message,
         onConfirm: async () => {
           setConfirmDialog(null);
-          if (isHost) {
-            await api(`/api/games/${gameId}/action`, { action: "destroy", pid: c.pid, secret: c.secret }).catch(() => {});
-          } else {
-            await api(`/api/games/${gameId}/action`, { action: "leave", pid: c.pid, secret: c.secret }).catch(() => {});
-          }
+          await api(`/api/games/${gameId}/action`, { action: "leave", pid: c.pid, secret: c.secret }).catch(() => {});
           clearCreds(gameId);
           router.push("/");
         },
@@ -521,21 +517,6 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       router.push("/");
     }
   }, [gameId, isSolo, isHost, router]);
-
-  // If user closes tab or navigates away, inform the server immediately via beacon
-  useEffect(() => {
-    if (isSolo || !gameId) return;
-    const handleBeforeUnload = () => {
-      const c = credsRef.current;
-      if (!c) return;
-      const action = isHost ? "destroy" : "leave";
-      const payload = JSON.stringify({ action, pid: c.pid, secret: c.secret });
-      const blob = new Blob([payload], { type: "application/json" });
-      navigator.sendBeacon?.(`/api/games/${gameId}/action`, blob);
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isSolo, gameId, isHost]);
 
   const doRoll = useCallback(async () => {
     const c = credsRef.current;

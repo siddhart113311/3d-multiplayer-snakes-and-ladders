@@ -113,38 +113,72 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
     case "leave": {
       if (me) {
-        if (isHost) {
-          // Host leaving (lobby or in-game) terminates and deletes the game
-          removeCachedGame(id);
-          const targets = [id, code];
-          await triggerGameEvent(targets, "game-destroyed", {
-            code,
-            gameId: id,
-            reason: "The host left the game. The game has ended.",
-          }).catch(() => undefined);
+        if (state.status === "waiting") {
+          if (isHost) {
+            // Host leaving lobby terminates and deletes the lobby
+            removeCachedGame(id);
+            const targets = [id, code];
+            await triggerGameEvent(targets, "game-destroyed", {
+              code,
+              gameId: id,
+              reason: "The host left the lobby. The game has ended.",
+            }).catch(() => undefined);
 
-          if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
-            try {
-              const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
-              const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
-              await roomService.deleteRoom(code.toUpperCase()).catch(() => undefined);
-            } catch (lkErr) {
-              console.warn("[LiveKit] deleteRoom failed:", lkErr);
+            if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
+              try {
+                const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
+                const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
+                await roomService.deleteRoom(code.toUpperCase()).catch(() => undefined);
+              } catch (lkErr) {
+                console.warn("[LiveKit] deleteRoom failed:", lkErr);
+              }
             }
-          }
 
-          await db.delete(games).where(eq(games.id, id));
-          return Response.json({ ok: true, destroyed: true, gameId: id, code });
-        } else if (state.status === "waiting") {
-          state.players = state.players.filter((p) => p.id !== me.id);
-          logLinePublic(state, `${me.name} left`);
+            await db.delete(games).where(eq(games.id, id));
+            return Response.json({ ok: true, destroyed: true, gameId: id, code });
+          } else {
+            state.players = state.players.filter((p) => p.id !== me.id);
+            logLinePublic(state, `${me.name} left`);
+          }
         } else if (state.status === "playing") {
-          // Guest leaving active game becomes CPU
+          // In active play, departing player converts to CPU bot
           me.isBot = true;
           if (!me.name.includes("(CPU)")) {
             me.name = `${me.name} (CPU)`;
           }
-          logLinePublic(state, `${me.name} left. A CPU has taken over.`);
+
+          if (isHost) {
+            // Migrate host role to next remaining human player
+            const nextHuman = state.players.find((p) => !p.isBot && !p.finished);
+            if (nextHuman) {
+              state.hostId = nextHuman.id;
+              logLinePublic(state, `${me.name} left. ${nextHuman.name} is now host. A CPU has taken over.`);
+            } else {
+              // No human players remain in the game
+              removeCachedGame(id);
+              const targets = [id, code];
+              await triggerGameEvent(targets, "game-destroyed", {
+                code,
+                gameId: id,
+                reason: "All human players have left the game.",
+              }).catch(() => undefined);
+
+              if (process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET) {
+                try {
+                  const lkHost = process.env.LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://");
+                  const roomService = new RoomServiceClient(lkHost, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
+                  await roomService.deleteRoom(code.toUpperCase()).catch(() => undefined);
+                } catch (lkErr) {
+                  console.warn("[LiveKit] deleteRoom failed:", lkErr);
+                }
+              }
+
+              await db.delete(games).where(eq(games.id, id));
+              return Response.json({ ok: true, destroyed: true, gameId: id, code });
+            }
+          } else {
+            logLinePublic(state, `${me.name} left. A CPU has taken over.`);
+          }
         }
       }
       break;

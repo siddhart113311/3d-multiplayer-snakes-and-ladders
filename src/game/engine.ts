@@ -370,15 +370,17 @@ function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
 }
 
-function advanceTurn(state: GameState) {
+function advanceTurn(state: GameState): boolean {
   const n = state.players.length;
+  const prevTurn = state.turn;
   for (let i = 1; i <= n; i++) {
     const idx = (state.turn + i) % n;
     if (!state.players[idx].finished) {
       state.turn = idx;
-      return;
+      return idx <= prevTurn;
     }
   }
+  return false;
 }
 
 function finishPlayer(state: GameState, p: Player) {
@@ -502,7 +504,15 @@ export function applyRoll(state: GameState, playerId: string, throttleMs = 400):
     }
   }
 
-  advanceTurn(state);
+  const roundCompleted = advanceTurn(state);
+
+  // In Hunt mode: Round-Based Serpent Phase!
+  // When all active players have completed their roll in the round, the serpent pack stalks the leader.
+  if (roundCompleted && state.mode === "hunt" && state.status === "playing") {
+    logLine(state, "The round ends — the serpent pack stalks!");
+    creepOnce(state, def);
+  }
+
   return { ok: true };
 }
 
@@ -619,7 +629,7 @@ export function advanceHunt(state: GameState, now: number) {
 /** Advance every time-driven hazard for the active mode. */
 export function advanceWorld(state: GameState, now: number) {
   advanceFire(state, now);
-  advanceHunt(state, now);
+  // Hunt mode is round-based: the serpent pack stalks deterministically on round completion in applyRoll.
 }
 
 /** Timeout after which an inactive player is considered disconnected/unresponsive (28 seconds). */
@@ -814,7 +824,7 @@ export function publicStateBroadcast(state: GameState) {
     chat: state.chat.slice(-5),
     snakes: state.snakes,
     ladders: state.ladders,
-    events: state.events.slice(-4),
+    events: state.events.slice(-16),
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,

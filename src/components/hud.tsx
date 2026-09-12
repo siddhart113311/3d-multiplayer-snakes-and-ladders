@@ -177,48 +177,26 @@ export const FireTimer = React.memo(function FireTimer({
   );
 });
 
-/** Hunt mode: countdown until the stalking pack takes another step. */
+/** Hunt mode: indicator that the stalking pack advances at the end of each round. */
 export const HuntTimer = React.memo(function HuntTimer({
-  nextCreepAt,
-  interval,
   compact = false,
 }: {
-  nextCreepAt: number;
-  interval: number;
+  nextCreepAt?: number;
+  interval?: number;
   compact?: boolean;
 }) {
-  const [remain, setRemain] = useState(() => Math.max(0, nextCreepAt - Date.now()));
-
-  useEffect(() => {
-    const update = () => setRemain(Math.max(0, nextCreepAt - Date.now()));
-    update();
-    const timer = setInterval(update, 100);
-    return () => clearInterval(timer);
-  }, [nextCreepAt]);
-
-  const frac = interval > 0 ? Math.min(1, Math.max(0, remain / interval)) : 0;
-  const imminent = remain < 1500;
   return (
     <div
-      className={`flex items-center backdrop-blur-md ${compact ? "gap-1.5 rounded-xl px-2 py-1" : "gap-2 rounded-2xl px-3 py-2"} border ${
-        imminent ? "border-violet-400/60 bg-violet-500/25" : "border-violet-300/25 bg-black/35"
-      }`}
+      className={`flex items-center backdrop-blur-md ${compact ? "gap-1.5 rounded-xl px-2 py-1" : "gap-2 rounded-2xl px-3 py-2"} border border-violet-400/50 bg-violet-500/20`}
     >
-      <Crosshair className={`${compact ? "h-4 w-4" : "h-5 w-5"} ${imminent ? "animate-ping text-violet-300" : "text-violet-400"}`} />
+      <Crosshair className={`${compact ? "h-4 w-4" : "h-5 w-5"} animate-pulse text-violet-300`} />
       {!compact && (
         <div className="flex flex-col">
-          <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-200/80">Pack closing in</span>
-          <div className="h-1.5 w-28 overflow-hidden rounded-full bg-white/10">
-            <div
-              className={`h-full rounded-full transition-[width] duration-200 ${imminent ? "bg-violet-300" : "bg-violet-400"}`}
-              style={{ width: `${frac * 100}%` }}
-            />
-          </div>
+          <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-200/80">Hunt Mode</span>
+          <span className="text-[11px] font-bold text-violet-200">Pack stalks each round</span>
         </div>
       )}
-      <span className={`font-mono font-bold ${compact ? "text-xs" : "text-sm"} text-violet-200`}>
-        {(remain / 1000).toFixed(1)}s
-      </span>
+      {compact && <span className="font-mono text-xs font-bold text-violet-200">HUNT</span>}
     </div>
   );
 });

@@ -284,7 +284,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       return () => clearInterval(iv);
     }
 
-    // Online multiplayer: Zero continuous polling! Re-sync when user returns to tab
+    // Online multiplayer: Re-sync when user returns to tab
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible" && !terminatedReason && pubRef.current?.status !== "finished") {
         void fetchState();
@@ -292,19 +292,25 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    // Fallback safety poll ONLY if Pusher is not configured at all in .env
-    const pusher = getPusherClient();
-    let fallbackIv: NodeJS.Timeout | undefined;
-    if (!pusher) {
-      fallbackIv = setInterval(() => {
-        if (terminatedReason || pubRef.current?.status === "finished") return;
+    // Safety heartbeat interval for online multiplayer:
+    // Ensures quick recovery (<2.5s) if any WebSocket packet is dropped or delayed.
+    // Zero DB load because GET reads directly from in-memory cache (<1ms).
+    const safetyIv = setInterval(() => {
+      if (terminatedReason || localRef.current) return;
+      const st = pubRef.current;
+      if (!st || st.status !== "playing") return;
+      const c = credsRef.current;
+      const cur = st.players[st.turn];
+      const isMyTurn = Boolean(c && cur && cur.id === c.pid && !cur.isBot);
+      // If waiting for opponent or bot, or if our turn action has stalled, sync
+      if (!isMyTurn || Date.now() - st.lastActionAt > 3500) {
         void fetchState();
-      }, 10000);
-    }
+      }
+    }, 2500);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (fallbackIv) clearInterval(fallbackIv);
+      clearInterval(safetyIv);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
@@ -334,6 +340,11 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
 
     chUpper.bind("game-updated", onGameUpdated);
     chUpper.bind("game-destroyed", onGameDestroyed);
+
+    if (chLower) {
+      chLower.bind("game-updated", onGameUpdated);
+      chLower.bind("game-destroyed", onGameDestroyed);
+    }
 
     const onConnected = () => {
       if (!terminatedReason && pubRef.current?.status !== "finished") {
@@ -453,12 +464,12 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
   const current = pub ? pub.players[pub.turn] : null;
   const isHost = Boolean(me && pub && me.id === pub.hostId);
 
-  // In Hunt / Fire mode: Host triggers the server hazard tick right as the timer elapses.
-  // Ref-based dedup: only reschedule when the target timestamp actually changes.
+  // In Fire mode: Host triggers the server hazard tick right as the timer elapses.
+  // Hunt mode is now round-based and runs deterministically upon round completion.
   const hazardNextAtRef = useRef(0);
   useEffect(() => {
-    if (localRef.current || !isHost || pub?.status !== "playing") return;
-    const nextAt = pub.mode === "hunt" ? pub.nextCreepAt : pub.mode === "fire" ? pub.nextSnakeAt : 0;
+    if (localRef.current || !isHost || pub?.status !== "playing" || pub.mode !== "fire") return;
+    const nextAt = pub.nextSnakeAt;
     if (!nextAt || nextAt === hazardNextAtRef.current) return;
     hazardNextAtRef.current = nextAt;
     const delay = Math.max(50, nextAt - Date.now() + 50);
@@ -466,7 +477,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       void fetchState();
     }, delay);
     return () => clearTimeout(t);
-  }, [isHost, pub?.status, pub?.mode, pub?.nextCreepAt, pub?.nextSnakeAt, fetchState]);
+  }, [isHost, pub?.status, pub?.mode, pub?.nextSnakeAt, fetchState]);
 
   const onDestroyGame = useCallback(() => {
     setConfirmDialog({
@@ -563,7 +574,7 @@ export default function GameClient({ gameId, solo }: { gameId?: string; solo?: S
       // let the previous choreography finish so turns stay readable
       if (directorRef.current?.busy) return;
       const nowMs = Date.now();
-      if (nowMs - lastBotRollRef.current < 1300) return;
+      if (nowMs - lastBotRollRef.current < 650) return;
       lastBotRollRef.current = nowMs;
       void request("roll", meNow.id, c.secret)
         .then(processState)

@@ -120,7 +120,7 @@ export class Director {
   }
 
   get busy(): boolean {
-    return this.running || this.tweens.length > 0;
+    return this.running || this.tweens.length > 0 || this.queue.length > 0;
   }
 
   private tween(dur: number, fn: (t: number) => void): Promise<void> {
@@ -198,14 +198,13 @@ export class Director {
             run: async () => {
               this.bridge.onDiceRoll?.(ev.dice, ev.playerId);
               sfx.diceRoll();
-              // Distinct tumble animation so the roll is clearly seen (0.75s)
-              await this.tween(0.75, () => {});
+              // Snappy tumble animation (0.42s)
+              await this.tween(0.42, () => {});
               // Land SFX and face reveal
               sfx.diceLand(ev.dice);
               this.bridge.onDiceLand?.(ev.dice, ev.playerId);
-              // Readability pause (0.55s) allows the dice to settle on its face
-              // and the player to clearly read the number BEFORE the token starts hopping
-              await this.tween(0.55, () => {});
+              // Face readability pause (0.22s)
+              await this.tween(0.22, () => {});
             },
           });
           break;
@@ -269,7 +268,7 @@ export class Director {
       const to = cellWorld(this.bridge.def, path[i]);
       const peak = 0.5;
       sfx.hop(i);
-      await this.tween(0.16, (t) => {
+      await this.tween(0.12, (t) => {
         const e = easeInOut(t);
         tk.x = from.x + (to.x - from.x) * e;
         tk.z = from.z + (to.z - from.z) * e;
@@ -281,7 +280,7 @@ export class Director {
     this.shake(0.06);
     const land = cellWorld(this.bridge.def, path[path.length - 1], CELL_Y + 0.15);
     this.bridge.burst?.(land, color, 12, 1.6);
-    await this.tween(0.16, (t) => {
+    await this.tween(0.12, (t) => {
       tk.squash = 0.72 + 0.28 * easeOut(t);
     });
   }

@@ -5,6 +5,7 @@ export interface CachedGame {
   code: string;
   state: GameState;
   updatedAt: number;
+  lastDbSyncAt: number;
 }
 
 declare global {
@@ -34,13 +35,16 @@ export function getCachedGame(idOrCode: string): CachedGame | null {
 }
 
 /** Store or update an active game in the in-memory cache. */
-export function setCachedGame(id: string, code: string, state: GameState): CachedGame {
+export function setCachedGame(id: string, code: string, state: GameState, didDbSync: boolean = false): CachedGame {
   const normCode = code.toUpperCase();
+  const existing = cache.get(id);
+  const now = Date.now();
   const entry: CachedGame = {
     id,
     code: normCode,
     state,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    lastDbSyncAt: didDbSync ? now : (existing?.lastDbSyncAt ?? now),
   };
   cache.set(id, entry);
   codeToId.set(normCode, id);

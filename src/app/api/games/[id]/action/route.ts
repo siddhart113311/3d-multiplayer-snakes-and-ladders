@@ -215,9 +215,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
   }
 
-  // Update in-memory cache immediately (instant, <1ms)
-  setCachedGame(id, code, state);
-
   const serverNow = Date.now();
   const pubForBroadcast = publicStateBroadcast(state);
   const targets = [id, code];
@@ -242,15 +239,28 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   }
 
-  const dbPromise = db
-    .update(games)
-    .set({ state, status: state.status, updatedAt: new Date() })
-    .where(eq(games.id, id))
-    .catch((e) => {
-      console.error("[action] background DB write failed:", e);
-    });
+  const isStructuralChange = ["start", "leave", "destroy", "addBot", "removeBot", "rematch"].includes(body.action);
+  const isFinished = state.status === "finished";
+  const timeSinceLastSync = serverNow - (cached?.lastDbSyncAt ?? 0);
+  const shouldSyncDb = isStructuralChange || isFinished || timeSinceLastSync > 10000;
 
-  await Promise.allSettled([...pusherTriggers, dbPromise]);
+  // Update in-memory cache immediately (instant, <1ms)
+  setCachedGame(id, code, state, shouldSyncDb);
+
+  const dbPromises: Promise<any>[] = [];
+  if (shouldSyncDb) {
+    dbPromises.push(
+      db
+        .update(games)
+        .set({ state, status: state.status, updatedAt: new Date() })
+        .where(eq(games.id, id))
+        .catch((e) => {
+          console.error("[action] background DB write failed:", e);
+        })
+    );
+  }
+
+  await Promise.allSettled([...pusherTriggers, ...dbPromises]);
 
   return Response.json({
     ok: true,

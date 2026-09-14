@@ -76,7 +76,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
     // 5. If state mutated (hazard moved or player converted to bot), broadcast and persist to DB
     if (livenessChanged || hazardAdvanced) {
+      const timeSinceLastSync = now - (cached?.lastDbSyncAt ?? 0);
+      const shouldSyncDb = livenessChanged || timeSinceLastSync > 10000;
+      
       cached.updatedAt = now;
+      if (shouldSyncDb) {
+        cached.lastDbSyncAt = now;
+      }
+      
       // Fire DB write + Pusher broadcast in the background (non-blocking).
       // The response is returned immediately from the in-memory cache.
       const pubForBroadcast = publicStateBroadcast(state);
@@ -90,14 +97,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         } catch (e) {
           console.error("[GET] background Pusher trigger failed:", e);
         }
-        try {
-          await ensureDatabase().catch(() => undefined);
-          await db
-            .update(games)
-            .set({ state, status: state.status, updatedAt: new Date() })
-            .where(eq(games.id, id));
-        } catch (e) {
-          console.error("[GET] background DB write failed:", e);
+        if (shouldSyncDb) {
+          try {
+            await ensureDatabase().catch(() => undefined);
+            await db
+              .update(games)
+              .set({ state, status: state.status, updatedAt: new Date() })
+              .where(eq(games.id, id));
+          } catch (e) {
+            console.error("[GET] background DB write failed:", e);
+          }
         }
       })();
     }

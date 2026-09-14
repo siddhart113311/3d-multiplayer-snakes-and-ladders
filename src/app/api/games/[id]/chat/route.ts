@@ -52,11 +52,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   addChat(state, { playerId: me.id, name: me.name, color: me.color, text });
-  // Update in-memory cache immediately (instant, <1ms)
-  setCachedGame(id, code, state);
-
   const serverNow = Date.now();
   const pubForBroadcast = publicStateBroadcast(state);
+
+  const timeSinceLastSync = serverNow - (cached?.lastDbSyncAt ?? 0);
+  const shouldSyncDb = timeSinceLastSync > 10000;
+
+  // Update in-memory cache immediately (instant, <1ms)
+  setCachedGame(id, code, state, shouldSyncDb);
 
   const pusherPromise = triggerGameEvent([id, code], "game-updated", {
     code,
@@ -66,15 +69,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     console.error("[chat] background Pusher trigger failed:", e);
   });
 
-  const dbPromise = db
-    .update(games)
-    .set({ state, updatedAt: new Date() })
-    .where(eq(games.id, id))
-    .catch((e) => {
-      console.error("[chat] background DB write failed:", e);
-    });
+  const dbPromises: Promise<any>[] = [];
+  if (shouldSyncDb) {
+    dbPromises.push(
+      db
+        .update(games)
+        .set({ state, updatedAt: new Date() })
+        .where(eq(games.id, id))
+        .catch((e) => {
+          console.error("[chat] background DB write failed:", e);
+        })
+    );
+  }
 
-  await Promise.allSettled([pusherPromise, dbPromise]);
+  await Promise.allSettled([pusherPromise, ...dbPromises]);
 
   return Response.json({ ok: true, state: publicState(state, me.id), serverNow });
 }
